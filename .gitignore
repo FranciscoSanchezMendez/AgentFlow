@@ -1,0 +1,25 @@
+# Dependencias
+node_modules/
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Secretos y entorno
+.env
+.env.*
+!.env.example
+
+# Vercel
+.vercel
+
+# Logs y SO
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# Herramientas locales
+.claude/
+coverage/
