@@ -321,8 +321,73 @@ export const PREVIEW_TEST_SCRIPT = String.raw`
         var n = all('a, button, input, select, textarea').length;
         return { ok: n > 0, detail: n + ' elemento(s) interactivos.' };
       });
+    },
+
+    // Agenda creada desde cero: comprobaciones básicas + las del calendario (en featureChecks).
+    booking: function () {
+      SUITES.smoke();
     }
   };
+
+  function bookingChecks() {
+    var needsLogin = typeof window.getSession === 'function';
+    function freeSlots() { return all('#booking-calendar .slot').filter(function (b) { return !b.disabled; }); }
+    function pickSlot() {
+      for (var w = 0; w < 3; w++) {
+        var free = freeSlots();
+        if (free.length) { free[0].click(); return free[0].getAttribute('data-slot'); }
+        $('#week-next').click();
+      }
+      return null;
+    }
+    function login() {
+      var form = $('#login-form');
+      if (!form || window.getSession()) return;
+      form.elements.email.value = 'demo@agentflow.dev';
+      form.elements.password.value = 'Demo1234!';
+      submit(form);
+    }
+
+    check('El calendario muestra huecos libres de 30 minutos', function () {
+      $('#week-next').click();
+      var slots = all('#booking-calendar .slot');
+      var free = freeSlots().length;
+      var gap = slots.length > 1 ? (new Date(slots[1].getAttribute('data-slot')) - new Date(slots[0].getAttribute('data-slot'))) / 60000 : 0;
+      return { ok: free > 0 && gap === 30, detail: free + ' hueco(s) libres la semana próxima; intervalo de ' + gap + ' minutos.' };
+    });
+    if (needsLogin) {
+      check('Sin sesión iniciada no se puede reservar', function () {
+        var logout = $('#logout');
+        if (window.getSession() && logout) logout.click();
+        var button = $('#booking-form button[type="submit"]');
+        return yesNo(!window.getSession() && button.disabled, 'El botón «Reservar llamada» está desactivado sin sesión.', 'Permite reservar sin haber iniciado sesión.');
+      });
+    }
+    var booked = null;
+    check(needsLogin ? 'Al iniciar sesión se puede reservar y queda registrado el usuario' : 'Reservar un hueco lo registra con el email del usuario', function () {
+      var user;
+      if (needsLogin) {
+        login();
+        user = window.getSession() ? window.getSession().user.email : null;
+        if (!user) return { ok: false, detail: 'No se pudo iniciar sesión con el usuario de prueba.' };
+        if ($('#booking-form button[type="submit"]').disabled) return { ok: false, detail: 'Tras iniciar sesión el calendario sigue bloqueado.' };
+      } else {
+        user = 'ana@example.com';
+        $('#booking-email').value = user;
+      }
+      booked = pickSlot();
+      $('#booking-topic').value = 'Demo del producto';
+      submit($('#booking-form'));
+      var rows = all('#reservations tbody tr').map(function (tr) { return tr.textContent; });
+      var ok = rows.some(function (t) { return t.indexOf(user) !== -1 && t.indexOf('Demo del producto') !== -1; });
+      return { ok: ok, detail: ok ? 'Reserva registrada a nombre de ' + user + '.' : 'La reserva no aparece (' + ($('#booking-status').textContent || 'sin mensaje') + ').' };
+    });
+    check('No permite reservar dos veces el mismo hueco', function () {
+      if (!booked) return { ok: false, detail: 'No se llegó a reservar ningún hueco.' };
+      var r = bookSlot(booked, 'otra@ejemplo.com', 'Duplicada');
+      return { ok: r.ok === false, detail: r.ok === false ? 'Rechazada: «' + r.error + '»' : 'Se aceptó una reserva duplicada.' };
+    });
+  }
 
   // Mejoras añadidas en el hilo: se comprueban si están presentes en la página.
   function featureChecks() {
@@ -344,6 +409,7 @@ export const PREVIEW_TEST_SCRIPT = String.raw`
         return { ok: text === String(new Date().getFullYear()), detail: text ? 'Año mostrado: ' + text : 'El año está vacío.' };
       });
     }
+    if ($('#booking-calendar')) bookingChecks();
     var news = $('#novedades-list');
     if (news) {
       check('«Novedades» muestra las mejoras pedidas en el hilo', function () {

@@ -20,6 +20,7 @@ const SUITE_LABEL: Record<string, string> = {
   dashboard: 'dashboard',
   landing: 'landing page',
   list: 'aplicación de lista',
+  booking: 'agenda de llamadas',
   smoke: 'comprobación básica de la página',
 };
 

@@ -28,7 +28,12 @@ const NEW_THREAD_EXAMPLES = [
   'Construye una lista de tareas con filtros.',
 ];
 
-const FOLLOWUP_EXAMPLES = ['Añade un modo oscuro.', 'Añade un pie de página con el año actual.', 'Añade un aviso de ofertas de temporada.'];
+const FOLLOWUP_EXAMPLES = [
+  'Añade un calendario para agendar sesiones de llamada de 30 minutos.',
+  'Añade un modo oscuro.',
+  'Añade un pie de página con el año actual.',
+  'Elimina la sección de novedades.',
+];
 
 type Action = { type: 'event'; event: WorkflowEvent } | { type: 'load'; run: Run } | { type: 'error'; message: string } | { type: 'reset' };
 
@@ -370,7 +375,17 @@ export function Dashboard() {
           {run?.summary && run.status !== 'running' && (
             <section className={`card report report-${run.status}`} aria-labelledby="report-title">
               <p className="eyebrow">Informe final del Orchestrator</p>
-              <h2 id="report-title">{run.status === 'passed' ? 'Workflow completado' : run.status === 'failed' ? 'Workflow con tareas fallidas' : 'Ejecución interrumpida'}</h2>
+              <h2 id="report-title">
+                {run.tasks.length === 0
+                  ? run.status === 'passed'
+                    ? 'Sin cambios necesarios'
+                    : 'Petición no implementada'
+                  : run.status === 'passed'
+                    ? 'Workflow completado'
+                    : run.status === 'failed'
+                      ? 'Workflow con tareas fallidas'
+                      : 'Ejecución interrumpida'}
+              </h2>
               <p>{run.summary}</p>
               <p className="muted">Petición: «{run.prompt}» · modo {run.mode === 'demo' ? 'demo' : 'LLM'}</p>
             </section>

@@ -28,6 +28,8 @@ export interface AcceptanceCriterion {
    * cumplido. Los usa la verificación estática de Testing.
    */
   expect?: string[];
+  /** Fragmentos que NO deben aparecer (p. ej. tras eliminar algo). Si el archivo no existe, se cumple. */
+  absent?: string[];
 }
 
 export interface Task {

@@ -33,6 +33,11 @@ export interface PlanInput {
 export interface PlanOutput {
   rationale: string;
   tasks: PlannedTask[];
+  /**
+   * Solo cuando no hay tareas: 'noop' si no hace falta cambiar nada y
+   * 'unsupported' si el proveedor no sabe implementar la petición.
+   */
+  outcome?: 'noop' | 'unsupported';
 }
 
 export interface ImplementInput {
@@ -85,21 +90,30 @@ export function staticReview(files: WorkspaceSnapshot, criteria: AcceptanceCrite
   const all = Object.values(files).join('\n');
   const results: TestResult[] = criteria.map((criterion) => {
     const expected = criterion.expect ?? [];
+    const forbidden = criterion.absent ?? [];
     const base = { criterionId: criterion.id, name: criterion.description, file: criterion.file };
+    const where = criterion.file ? ` en ${criterion.file}` : '';
 
     if (criterion.file && files[criterion.file] === undefined) {
+      // Un criterio solo de ausencia se cumple si el archivo ya no existe (p. ej. se eliminó).
+      if (expected.length === 0 && forbidden.length > 0) {
+        return { ...base, passed: true, detail: `${criterion.file} ya no existe en el workspace.` };
+      }
       return { ...base, passed: false, detail: `El archivo ${criterion.file} no existe en el workspace.` };
     }
     const content = criterion.file ? files[criterion.file] : all;
     const missing = expected.filter((fragment) => !content.includes(fragment));
-    const passed = missing.length === 0;
-    const where = criterion.file ? ` en ${criterion.file}` : '';
+    const present = forbidden.filter((fragment) => content.includes(fragment));
+    const passed = missing.length === 0 && present.length === 0;
+    const checks = expected.length + forbidden.length;
+    const problems = [
+      missing.length ? `No se encontró${where}: ${missing.map((m) => `\`${m}\``).join(', ')}` : '',
+      present.length ? `Sigue apareciendo${where}: ${present.map((m) => `\`${m}\``).join(', ')}` : '',
+    ].filter(Boolean);
     return {
       ...base,
       passed,
-      detail: passed
-        ? `Verificado${where} (${expected.length} comprobación${expected.length === 1 ? '' : 'es'}).`
-        : `No se encontró${where}: ${missing.map((m) => `\`${m}\``).join(', ')}`,
+      detail: passed ? `Verificado${where} (${checks} comprobación${checks === 1 ? '' : 'es'}).` : problems.join(' · '),
     };
   });
   const feedback = results

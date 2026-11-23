@@ -84,11 +84,17 @@ El historial se organiza en **hilos**. Un hilo es una línea de trabajo continua
 
 | Mejora | Ejemplos | Qué hace |
 | --- | --- | --- |
+| Calendario de llamadas | "calendario", "agenda", "reserva" (también "reserba"), "cita", "llamada" | `agenda.js` (huecos de 30 min de lunes a viernes 9:00–17:00, sin dobles reservas ni fechas pasadas, solo el autor cancela) y `booking.js` (semana navegable, reservar, cancelar, tabla de "Reservas registradas" con el usuario). **Si el hilo tiene inicio de sesión**, exige sesión iniciada y registra la reserva con el email del usuario: parchea `app.js` para avisar al calendario al entrar o salir. Si no, pide el email en el formulario |
 | Modo oscuro | "añade un modo oscuro", "tema" | Estilos del tema en `styles.css`, `theme.js` con botón selector y respeto de la preferencia del sistema |
 | Pie de página | "pie de página", "footer", "copyright" | `<footer>` en `index.html`, estilos y `footer.js` con el año actual |
-| Cualquier otra | "añade un aviso de ofertas", "exportar a CSV"… | Sin plantilla específica: Develop registra la mejora en una sección "Novedades" de la página (`changelog.js`) |
+| Eliminar novedades | "elimina la nota", "quita las novedades" | Quita la sección, su script y sus estilos, y **borra** `changelog.js`. Testing verifica que ya no existen y no lo cuenta como regresión |
+| Registrar en novedades | "registra en novedades: …" | Añade la petición a una sección "Novedades" (solo si se pide expresamente) |
 
-Las mejoras también tienen un fallo controlado en la primera iteración y su propia comprobación en las pruebas de interacción de la vista previa.
+- **Varias mejoras en una petición**: por ejemplo, "elimina la nota, necesito un calendario…" aplica las dos en la misma implementación.
+- **Aplicación + calendario en un hilo nuevo**: "genera un inicio de sesión que acceda a una reserva de calendario" construye primero el login y después el calendario integrado con él.
+- **Peticiones sin plantilla**: el modo demo **no inventa una implementación**. El Orchestrator explica que no sabe resolverla, enumera las mejoras disponibles e indica que para peticiones libres hay que activar el modo LLM. El run queda como "Petición no implementada" y no toca ningún archivo.
+- Las mejoras tienen un fallo controlado en la primera iteración y su propia comprobación en las pruebas de interacción de la vista previa. Por ejemplo, el calendario comprueba que sin sesión no se puede reservar, que al iniciar sesión la reserva queda a nombre del usuario y que no se puede reservar dos veces el mismo hueco.
+- Las reservas viven en la memoria de la página generada. En la vista previa no persisten al recargar, porque el iframe aislado no tiene almacenamiento ni red. Guardarlas en un servidor requeriría un backend para la app generada, que el modo demo no crea.
 
 ---
 
@@ -291,7 +297,7 @@ jsdom no reproduce todos los comportamientos del navegador. Por ejemplo, un fall
 
 - La demo tiene 7 tipos de página. Las peticiones que no encajan en ninguno usan la aplicación de lista genérica con el título de la petición: siempre hay una página que ver, pero no está hecha a medida.
 - Las pruebas específicas solo existen para las páginas del catálogo; las páginas de un modelo real reciben la prueba de humo.
-- La demo no incluye ninguna eliminación de archivos. El motor y la UI las soportan y están cubiertas por tests.
+- En los hilos, el modo demo solo sabe aplicar las mejoras de la tabla anterior. Para cualquier otra petición hace falta el modo LLM, que tiene coste por uso de la API.
 - El rate limiting y el historial en memoria son por instancia. Para flujos LLM largos convendría una cola de trabajos.
 
 ## Herramientas de IA utilizadas

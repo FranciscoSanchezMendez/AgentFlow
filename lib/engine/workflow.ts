@@ -186,6 +186,25 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
     await pause();
 
     const plan = await provider.plan({ prompt, context: { history, files: Object.fromEntries(workspace) } });
+
+    // Sin tareas: el Orchestrator explica por qué y no se toca el workspace.
+    if (plan.tasks.length === 0) {
+      const noop = plan.outcome === 'noop';
+      run.status = noop ? 'passed' : 'failed';
+      run.summary = plan.rationale;
+      await say({ from: 'orchestrator', to: 'user', kind: 'report', content: plan.rationale });
+      await log('orchestrator', noop ? 'info' : 'warn', noop ? 'No hay cambios que hacer en el workspace.' : 'Petición no implementada: el proveedor actual no sabe resolverla.');
+      for (const agent of ['orchestrator', 'develop', 'testing'] as const) await status(agent, 'done', noop ? 'Sin cambios necesarios' : 'Petición no implementada');
+      run.finishedAt = now();
+      await emit({ type: 'run_finished', run: structuredClone(run) });
+      return run;
+    }
+
+    // Lo que esta implementación elimina a propósito no cuenta como regresión.
+    const removals = plan.tasks.flatMap((t) => t.acceptanceCriteria).filter((c) => c.absent?.length);
+    const notRemoved = (old: AcceptanceCriterion) =>
+      !removals.some((r) => r.file === old.file && (r.absent ?? []).some((a) => (old.expect ?? []).some((e) => e.includes(a) || a.includes(e))));
+
     const devTasks: Task[] = [];
     for (const planned of plan.tasks) devTasks.push(await createTask(planned, 'develop', 'testing'));
     const integration = await createTask(
@@ -303,8 +322,11 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
       ],
       createdAt: now(),
     };
-    if (regression.length > 0) {
-      const check = staticReview(Object.fromEntries(workspace), regression);
+    // Tampoco cuentan los criterios de archivos que esta implementación ha borrado.
+    const deletedNow = new Set(run.changes.filter((c) => c.kind === 'deleted' && !workspace.has(c.path)).map((c) => c.path));
+    const regressionChecks = regression.filter((c) => notRemoved(c) && !(c.file && deletedNow.has(c.file)));
+    if (regressionChecks.length > 0) {
+      const check = staticReview(Object.fromEntries(workspace), regressionChecks);
       const broken = check.results.filter((r) => !r.passed);
       integrationIteration.results.push({
         criterionId: 'regression',
@@ -312,7 +334,7 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
         passed: broken.length === 0,
         detail:
           broken.length === 0
-            ? `${regression.length} criterio(s) de implementaciones anteriores verificados de nuevo.`
+            ? `${regressionChecks.length} criterio(s) de implementaciones anteriores verificados de nuevo.`
             : `Se han roto ${broken.length} criterio(s): ${broken.map((r) => r.name).join('; ')}`,
       });
     }
