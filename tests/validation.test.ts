@@ -60,3 +60,22 @@ describe('readConfig', () => {
     expect(c.requestedMode).toBe('demo');
   });
 });
+
+describe('readConfig · Supabase', () => {
+  it('acepta las variables de la integración de Vercel (prefijo STORAGE_)', () => {
+    const c = readConfig({ STORAGE_SUPABASE_URL: 'https://x.supabase.co', STORAGE_SUPABASE_SERVICE_ROLE_KEY: 'clave-servicio' });
+    expect(c.supabaseUrl).toBe('https://x.supabase.co');
+    expect(c.supabaseServiceKey).toBe('clave-servicio');
+  });
+
+  it('da prioridad a los nombres propios y nunca usa la clave anónima', () => {
+    const c = readConfig({
+      SUPABASE_URL: 'https://propia.supabase.co',
+      STORAGE_SUPABASE_URL: 'https://integracion.supabase.co',
+      STORAGE_SUPABASE_ANON_KEY: 'anon',
+      NEXT_PUBLIC_STORAGE_SUPABASE_ANON_KEY: 'anon',
+    });
+    expect(c.supabaseUrl).toBe('https://propia.supabase.co');
+    expect(c.supabaseServiceKey).toBeNull();
+  });
+});

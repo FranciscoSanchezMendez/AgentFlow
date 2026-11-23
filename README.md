@@ -197,6 +197,10 @@ Todas son solo de servidor.
 
 ## Persistencia (Supabase)
 
+**Opción recomendada: integración de Vercel.** En tu proyecto de Vercel, **Storage → Create Database → Supabase**, plan gratuito. La integración crea la base de datos y añade las variables de entorno sola, con el prefijo `STORAGE_`. La app las reconoce sin configuración adicional: usa `STORAGE_SUPABASE_URL` y `STORAGE_SUPABASE_SERVICE_ROLE_KEY`. Después solo hay que ejecutar `supabase-schema.sql` en el SQL Editor (botón **Open in Supabase**) y volver a desplegar.
+
+**Opción manual:**
+
 1. Crea un proyecto en [supabase.com](https://supabase.com).
 2. En **SQL Editor**, ejecuta `supabase-schema.sql`. Es idempotente: si ya tenías la versión anterior del esquema, añade la tabla `file_changes` y la columna `tasks.files` sin perder datos.
 3. Copia la URL y la *service role key* (**Project Settings → API**) a `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`.
