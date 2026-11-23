@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { PREVIEW_TEST_SCRIPT, isPreviewTestMessage, type PreviewTestMessage } from '@/lib/client/previewTests';
+import { PREVIEW_ERROR_CAPTURE_SCRIPT, PREVIEW_TEST_SCRIPT, isPreviewTestMessage, type PreviewTestMessage } from '@/lib/client/previewTests';
 import { diffLines, diffStats, foldDiff } from '@/lib/diff';
 import type { FileChange, Iteration, Run, Task, WorkspaceFile } from '@/lib/types';
 import { buildPreviewDocument, buildWorkspace, languageOf, snapshotOf, workspaceSteps } from '@/lib/workspace';
@@ -10,6 +10,18 @@ import { Badge } from './ui';
 type Tab = 'files' | 'changes' | 'preview' | 'tests';
 
 const KIND_LABEL: Record<FileChange['kind'], string> = { created: 'Nuevo', modified: 'Modificado', deleted: 'Eliminado' };
+const KIND_VERB: Record<FileChange['kind'], string> = { created: 'creó', modified: 'modificó', deleted: 'eliminó' };
+
+const SUITE_LABEL: Record<string, string> = {
+  contact: 'formulario de contacto',
+  login: 'inicio de sesión',
+  api: 'API REST',
+  calculator: 'calculadora',
+  dashboard: 'dashboard',
+  landing: 'landing page',
+  list: 'aplicación de lista',
+  smoke: 'comprobación básica de la página',
+};
 
 export interface WorkspaceFocus {
   path: string;
@@ -21,7 +33,7 @@ export function Workspace({ run, focus }: { run: Run | null; focus: WorkspaceFoc
   const steps = useMemo(() => workspaceSteps(changes), [changes]);
   const tasks = useMemo(() => new Map((run?.tasks ?? []).map((t) => [t.id, t])), [run?.tasks]);
 
-  const [tab, setTab] = useState<Tab>('preview');
+  const [chosenTab, setTab] = useState<Tab | null>(null); // null = automático
   const [stepIdx, setStepIdx] = useState<number | null>(null); // null = seguir el último
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedChangeId, setSelectedChangeId] = useState<string | null>(null);
@@ -30,6 +42,7 @@ export function Workspace({ run, focus }: { run: Run | null; focus: WorkspaceFoc
   // Al cambiar de ejecución, volver a la última versión.
   useEffect(() => {
     setStepIdx(null);
+    setTab(null);
     setSelectedPath(null);
     setSelectedChangeId(null);
   }, [run?.id]);
@@ -58,6 +71,11 @@ export function Workspace({ run, focus }: { run: Run | null; focus: WorkspaceFoc
   }, [visibleChanges]);
 
   const empty = changes.length === 0;
+  const hasPreview = files.has('index.html');
+  // Sin página web que previsualizar, se abre en «Cambios» para que siempre se vea el trabajo.
+  const tab: Tab = chosenTab ?? (hasPreview ? 'preview' : 'changes');
+  const lastChange = changes.at(-1);
+  const lastTask = lastChange ? tasks.get(lastChange.taskId) : undefined;
 
   return (
     <section ref={sectionRef} className="card panel workspace" aria-labelledby="ws-title" id="workspace">
@@ -75,6 +93,26 @@ export function Workspace({ run, focus }: { run: Run | null; focus: WorkspaceFoc
           </div>
         )}
       </header>
+
+      {lastChange && (
+        <button
+          type="button"
+          className={`ws-live ${run?.status === 'running' ? 'is-running' : ''}`}
+          onClick={() => {
+            setStepIdx(null);
+            setTab('changes');
+            setSelectedChangeId(lastChange.id);
+          }}
+          title="Ver este cambio"
+        >
+          <span className="ws-live-dot" aria-hidden />
+          <span>
+            <strong>Develop</strong> {KIND_VERB[lastChange.kind]} <code>{lastChange.path}</code> · T{(lastTask?.position ?? 0) + 1} «{lastTask?.title}» · iteración{' '}
+            {lastChange.iteration}
+          </span>
+          <span className="ws-live-cta">Ver cambio →</span>
+        </button>
+      )}
 
       {empty ? (
         <p className="empty">
@@ -109,7 +147,7 @@ export function Workspace({ run, focus }: { run: Run | null; focus: WorkspaceFoc
           <div className="ws-tabs" role="tablist" aria-label="Vistas del workspace">
             {(
               [
-                ['preview', 'Vista previa'],
+                ['preview', hasPreview ? 'Vista previa' : 'Vista previa (sin página)'],
                 ['files', 'Archivos'],
                 ['changes', `Cambios (${visibleChanges.length})`],
                 ['tests', 'Pruebas'],
@@ -133,7 +171,9 @@ export function Workspace({ run, focus }: { run: Run | null; focus: WorkspaceFoc
           {tab === 'changes' && (
             <ChangesView changes={visibleChanges} tasks={tasks} selectedId={selectedChangeId} onSelect={setSelectedChangeId} />
           )}
-          {tab === 'preview' && <PreviewView snapshot={snapshot} versionKey={`${run?.id}-${upto}`} />}
+          {tab === 'preview' && (
+            <PreviewView snapshot={snapshot} versionKey={`${run?.id}-${upto}`} onShowFiles={() => setTab('files')} />
+          )}
           {tab === 'tests' && (
             <TestsView
               run={run!}
@@ -325,14 +365,22 @@ function ChangesView({
 
 /* ----------------------------- Vista previa ----------------------------- */
 
-function PreviewView({ snapshot, versionKey }: { snapshot: Record<string, string>; versionKey: string }) {
+function PreviewView({
+  snapshot,
+  versionKey,
+  onShowFiles,
+}: {
+  snapshot: Record<string, string>;
+  versionKey: string;
+  onShowFiles: () => void;
+}) {
   const [device, setDevice] = useState<'desktop' | 'mobile'>('desktop');
   const [reloadKey, setReloadKey] = useState(0);
   const [tests, setTests] = useState<PreviewTestMessage | null>(null);
   const testFrame = useRef<HTMLIFrameElement>(null);
 
   const doc = useMemo(() => buildPreviewDocument(snapshot), [snapshot]);
-  const testDoc = useMemo(() => buildPreviewDocument(snapshot, PREVIEW_TEST_SCRIPT), [snapshot]);
+  const testDoc = useMemo(() => buildPreviewDocument(snapshot, PREVIEW_TEST_SCRIPT, PREVIEW_ERROR_CAPTURE_SCRIPT), [snapshot]);
 
   useEffect(() => {
     setTests(null);
@@ -347,10 +395,15 @@ function PreviewView({ snapshot, versionKey }: { snapshot: Record<string, string
 
   if (!doc) {
     return (
-      <p className="empty">
-        Esta ejecución no ha generado una página web (<code>index.html</code>), así que no hay vista previa. Revisa los archivos y sus cambios en
-        las otras pestañas.
-      </p>
+      <div className="empty">
+        <p>
+          En esta versión del workspace todavía no hay <code>index.html</code>, así que no hay página que mostrar. Los archivos que ha escrito
+          Develop están en las pestañas Archivos y Cambios.
+        </p>
+        <button type="button" className="btn btn-ghost" onClick={onShowFiles}>
+          Ver archivos
+        </button>
+      </div>
     );
   }
 
@@ -385,6 +438,7 @@ function PreviewView({ snapshot, versionKey }: { snapshot: Record<string, string
         </div>
         <aside className="ws-ptests" aria-live="polite">
           <h3>Pruebas de interacción</h3>
+          {tests && <p className="ws-suite">Batería: {SUITE_LABEL[tests.suite] ?? tests.suite}</p>}
           <p className="muted">
             Ejecutadas en tu navegador sobre esta versión, en un iframe aislado: rellenan el formulario, lo envían y comprueban el resultado.
           </p>

@@ -107,7 +107,11 @@ const escapeClosing = (content: string, tag: 'script' | 'style') =>
  * `index.html`, incrustando las hojas de estilo y scripts locales que referencia.
  * Las referencias externas se eliminan. Devuelve `null` si no hay `index.html`.
  */
-export function buildPreviewDocument(files: Record<string, string>, extraScript?: string): string | null {
+export function buildPreviewDocument(
+  files: Record<string, string>,
+  extraScript?: string,
+  headScript?: string,
+): string | null {
   const html = files['index.html'];
   if (html === undefined) return null;
 
@@ -124,7 +128,11 @@ export function buildPreviewDocument(files: Record<string, string>, extraScript?
       return js === undefined ? '' : `<script data-file="${path}">\n${escapeClosing(js, 'script')}\n</script>`;
     });
 
-  const csp = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_CSP}">`;
+  const head = headScript ? `
+<script>
+${escapeClosing(headScript, 'script')}
+</script>` : '';
+  const csp = `<meta http-equiv="Content-Security-Policy" content="${PREVIEW_CSP}">${head}`;
   doc = /<head[^>]*>/i.test(doc) ? doc.replace(/<head[^>]*>/i, (m) => `${m}\n${csp}`) : `${csp}\n${doc}`;
 
   if (extraScript) {

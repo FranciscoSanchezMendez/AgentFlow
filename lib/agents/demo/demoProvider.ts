@@ -9,7 +9,7 @@ import type {
   ReviewOutput,
 } from '../provider';
 import { staticReview } from '../provider';
-import { findDemoTask, pickDomain, renderTemplate, type DemoDomain, type DemoTask } from './catalog';
+import { fillPlaceholders, findDemoTask, pickDomain, renderTemplate, type DemoDomain, type DemoTask } from './catalog';
 
 const FEEDBACK_ID = /^\[([\w-]+)\]/;
 
@@ -38,8 +38,8 @@ export class DemoProvider implements AgentProvider {
     };
   }
 
-  async implement({ task, attempt, feedback, workspace }: ImplementInput): Promise<ImplementOutput> {
-    const found = findDemoTask(task.title);
+  async implement({ prompt, task, attempt, feedback, workspace }: ImplementInput): Promise<ImplementOutput> {
+    const found = findDemoTask(task.title, prompt);
     if (!found) {
       // Tarea desconocida (p. ej. planificada por otro proveedor): un archivo con lo pedido.
       const path = `tasks/${task.id.slice(0, 8)}.md`;
@@ -50,7 +50,7 @@ export class DemoProvider implements AgentProvider {
 
     const omitted = omittedCriteria(template, attempt, feedback);
     const own = new Map(template.criteria.map((c) => [c.id, c]));
-    const files = renderTaskFiles(domain, template, omitted, workspace);
+    const files = renderTaskFiles(domain, template, omitted, workspace).map((f) => ({ ...f, content: fillPlaceholders(f.content, prompt) }));
 
     const fixed = attempt > 1 ? [...feedbackIds(feedback)].filter((id) => own.has(id) && !omitted.has(id)) : [];
     const covered = template.criteria.length - omitted.size;

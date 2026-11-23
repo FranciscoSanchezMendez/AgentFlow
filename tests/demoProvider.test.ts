@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEMO_DOMAINS, pickDomain, renderTemplate, type DemoDomain } from '@/lib/agents/demo/catalog';
+import { DEMO_DOMAINS, fillPlaceholders, pickDomain, renderTemplate, titleFromPrompt, type DemoDomain } from '@/lib/agents/demo/catalog';
 import { DemoProvider } from '@/lib/agents/demo/demoProvider';
 import { createProvider } from '@/lib/agents/factory';
 import { staticReview } from '@/lib/agents/provider';
@@ -26,9 +26,14 @@ describe('DemoProvider', () => {
   it.each([
     ['Crear una página de contacto responsive', 'contact'],
     ['Formulario de suscripción', 'contact'],
-    ['Crea una API REST de productos', 'api'],
-    ['Login de usuarios', 'auth'],
-    ['Una lista de tareas', 'generic'],
+    ['Implementa el login de usuarios con sesión segura', 'login'],
+    ['Haz una calculadora de propinas', 'calculator'],
+    ['Crea un dashboard con una tabla de ventas', 'dashboard'],
+    ['Crea una API REST para gestionar productos', 'api'],
+    ['Crea una landing page para una cafetería con menú y horarios', 'landing'],
+    ['Construye una lista de tareas con filtros', 'list'],
+    ['Quiero un blog con listado de artículos', 'list'],
+    ['Una plataforma de terapia', 'list'], // «plataforma» no activa contacto ni «terapia» la API
   ])('elige el dominio adecuado para «%s»', (prompt, domain) => {
     expect(pickDomain(prompt).id).toBe(domain);
   });
@@ -80,6 +85,46 @@ describe('DemoProvider', () => {
     const index = submit.files.find((f) => f.path === 'index.html')!.content;
     expect(index).toContain('name="email"');
     expect(index).toContain('<script src="validation.js"></script>');
+  });
+});
+
+describe('titleFromPrompt y placeholders', () => {
+  it.each([
+    ['Crea una landing page para una cafetería con menú y horarios', 'Cafetería'],
+    ['Haz una página web para mi restaurante', 'Restaurante'],
+    ['Crea un dashboard con una tabla de ventas', 'Dashboard'],
+    ['Quiero un blog con listado de artículos', 'Blog'],
+    ['Construye una lista de tareas con filtros', 'Lista de tareas'],
+    ['   ', 'Mi aplicación'],
+  ])('«%s» → «%s»', (prompt, title) => {
+    expect(titleFromPrompt(prompt)).toBe(title);
+  });
+
+  it('escapa el HTML de la petición', () => {
+    expect(fillPlaceholders('<h1>{{TITLE}}</h1><p>{{PROMPT}}</p>', 'Haz <script>alert(1)</script> algo')).toBe(
+      '<h1>&lt;script&gt;alert(1)&lt;/script&gt; algo</h1><p>Haz &lt;script&gt;alert(1)&lt;/script&gt; algo</p>',
+    );
+  });
+
+  it('ningún control usa un id/name que tape métodos del formulario (p. ej. form.reset)', () => {
+    const clobbering = /\b(?:id|name)="(reset|submit|requestSubmit|checkValidity|reportValidity|elements)"/;
+    for (const d of DEMO_DOMAINS) {
+      const markup = [...Object.values(d.templates), ...d.tasks.flatMap((t) => t.criteria.map((c) => c.snippet))].join('\n');
+      expect(markup.match(clobbering)?.[0] ?? null).toBeNull();
+    }
+  });
+
+  it('los títulos de tarea y los ids de criterio no se repiten entre dominios', () => {
+    const titles = DEMO_DOMAINS.flatMap((d) => d.tasks.map((t) => t.title));
+    expect(new Set(titles).size).toBe(titles.length);
+    for (const d of DEMO_DOMAINS) {
+      const ids = d.tasks.flatMap((t) => t.criteria.map((c) => c.id));
+      expect(new Set(ids).size).toBe(ids.length);
+    }
+  });
+
+  it('todos los dominios generan index.html y la página se adapta a la petición', () => {
+    for (const domain of DEMO_DOMAINS) expect(Object.keys(domain.templates)).toContain('index.html');
   });
 });
 

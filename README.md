@@ -50,6 +50,22 @@ Con el límite por defecto (3 iteraciones) la ejecución hace lo siguiente:
 
 Resultado final: 4 archivos, 8 cambios, 6 iteraciones de desarrollo y una página de contacto que funciona en la vista previa. Con límite 2 la tarea T2 falla y el run termina "con fallos"; con límite 1 fallan T2 y T3.
 
+### Otros tipos de petición
+
+En modo demo, **cualquier petición genera una página web funcional** que se puede ver y probar en el Workspace. El tipo se elige por palabras clave, y el título de la página se deriva de la petición ("landing page para una cafetería" → "Cafetería"):
+
+| Tipo | Ejemplos de petición | Página generada | Fallos controlados que detecta Testing |
+| --- | --- | --- | --- |
+| Contacto | contacto, formulario, suscripción | Formulario con validación y confirmación | Email sin validar, longitud mínima, sin confirmación |
+| Inicio de sesión | login, autenticación, contraseña | Login con usuario de prueba, sesión y cierre de sesión | Contraseña no comprobada, error que revela si el usuario existe, sesión sin guardar |
+| Calculadora | calculadora, propina | Calculadora de propinas con reparto por persona | Sin redondeo a céntimos, sin validación, sin botón de reinicio |
+| Dashboard | dashboard, tabla, ventas, métricas | Indicadores, tabla ordenable y filtrable, gráfico por región | Sin tabla, formato de moneda incorrecto, sin gráfico |
+| API REST | API, endpoint, REST, CRUD | API de productos en el navegador (GET/POST, 400, 404) con consola | POST sin implementar, código 200 en lugar de 201, ruta desconocida con 200 |
+| Landing page | landing, web para, cafetería, restaurante, tienda | Portada, servicios, horario con "abierto ahora", menú móvil | Cálculo de apertura siempre "abierto", sin indicador |
+| Lista (genérico) | cualquier otra petición (lista de tareas, blog…) | Aplicación de lista con alta, completar, eliminar y filtros | Sin completar ni eliminar, filtros sin efecto |
+
+Cada tipo tiene 3 tareas y sigue el mismo ciclo: los criterios se verifican sobre archivos concretos y hay al menos un fallo controlado en la primera iteración.
+
 ---
 
 ## Cómo se visualizan los artefactos (Workspace)
@@ -57,7 +73,8 @@ Resultado final: 4 archivos, 8 cambios, 6 iteraciones de desarrollo y una págin
 La sección **Workspace** del dashboard tiene:
 
 - **Selector de versión**: cada paso es "tarea + iteración", con el veredicto de Testing (✓/✕). Todo el workspace (archivos, cambios, vista previa) se muestra tal como estaba en ese paso.
-- **Vista previa**: la página generada funcionando, con modo escritorio/móvil. Al lado, **pruebas de interacción** que se ejecutan en tu navegador sobre esa versión: rellenan el formulario, lo envían y comprueban errores y confirmación. En el paso 5 (T3, iteración 1) reproducen el mismo fallo que reportó Testing (4/5); en la versión final pasan 5/5.
+- **Indicador en vivo**: muestra el último cambio de Develop (archivo, tarea e iteración) mientras se ejecuta el workflow. Al pulsarlo se abre ese diff.
+- **Vista previa**: la página generada funcionando, con modo escritorio/móvil. Al lado, **pruebas de interacción** que se ejecutan en tu navegador sobre esa versión y usan la página como una persona: rellenan, pulsan y envían, y comprueban el resultado. Hay una batería específica para cada tipo de página y una prueba básica de humo (contenido, título, elementos interactivos) para páginas desconocidas, como las que genera un modelo real. Todas incluyen una comprobación de errores de JavaScript. En la demo de contacto, el paso 5 (T3, iteración 1) reproduce el mismo fallo que reportó Testing; en la versión final pasan todas. Si una versión aún no tiene `index.html`, el Workspace se abre directamente en **Cambios** para que siempre se vea el trabajo.
 - **Archivos**: árbol del proyecto, contenido con números de línea, estado (nuevo/modificado) y qué tarea e iteración lo cambió por última vez.
 - **Cambios**: historial de creaciones, modificaciones y eliminaciones con un diff línea a línea (los archivos nuevos se muestran enteros como añadidos y los tramos largos sin cambios se pliegan).
 - **Pruebas**: resultados de Testing por tarea e iteración, con el motivo de cada fallo y enlace al archivo inspeccionado.
@@ -72,8 +89,8 @@ El modo demo es el predeterminado: no usa API keys, no tiene coste y es determin
 
 **Se simula** (no hay un modelo de IA tomando decisiones):
 
-- El plan del Orchestrator sale de una plantilla elegida por palabras clave (contacto/formulario, autenticación, API o genérica).
-- El código que escribe Develop sale de plantillas del catálogo (`lib/agents/demo/catalog.ts`), y sus "olvidos" del primer intento están predefinidos para mostrar el ciclo de corrección.
+- El plan del Orchestrator sale de una plantilla elegida por palabras clave (ver la tabla de tipos de petición).
+- El código que escribe Develop sale de plantillas del catálogo (`lib/agents/demo/domains/`), y sus "olvidos" del primer intento están predefinidos para mostrar el ciclo de corrección. De la petición solo se adapta el título.
 
 **Es real**:
 
@@ -217,17 +234,22 @@ npm test
 Cubren:
 
 - **Motor**: ciclo completo, archivos por tarea, creaciones y modificaciones con su versión anterior, feedback y corrección, límite de iteraciones, errores, cancelación, rutas peligrosas rechazadas, eliminaciones y archivos sin cambios.
-- **Catálogo demo**: cada criterio es satisfacible y, si se omite, falla solo él.
+- **Catálogo demo**:
+  - Cada criterio es satisfacible y, si se omite, falla solo él.
+  - Los títulos de tarea son únicos.
+  - Ningún control de formulario tapa métodos como `form.reset`.
+  - Se elige el tipo correcto para cada petición y el título se deriva escapando el HTML.
+- **Vistas previas en jsdom** (`tests/previewSuites.test.ts`): para los 7 tipos, carga la página generada en un DOM simulado y ejecuta su batería de pruebas de interacción. La versión final pasa todas y la que Testing rechazó falla al usarla. Las páginas desconocidas reciben la prueba de humo, que detecta errores de JavaScript.
 - **Artefactos de contacto**: la `validation.js` final valida bien y la primera tiene el fallo; el JS es sintácticamente válido; la página de preview está completa.
 - **Workspace**: saneado de rutas, reconstrucción por versión y documento de preview (CSP, recursos externos eliminados, escape de `</script>`).
 - **Diff**, **validación**, **rate limiting**, **reductor de UI**, **NDJSON**, **persistencia en memoria**, **streaming** y **rutas de la API**.
 
-Las pruebas de interacción de la vista previa se ejecutan en el navegador y no forman parte de Vitest (no hay DOM de navegador en los tests). El modo LLM y Supabase no se prueban contra servicios reales, porque requieren credenciales y tienen coste.
+jsdom no reproduce todos los comportamientos del navegador. Por ejemplo, un fallo por un botón `id="reset"` que tapaba `form.reset()` solo apareció en Chrome y quedó cubierto con un test específico. Por eso las vistas previas también se verificaron en un navegador real. El modo LLM y Supabase no se prueban contra servicios reales, porque requieren credenciales y tienen coste.
 
 ## Limitaciones conocidas
 
-- La demo tiene plantillas para cuatro tipos de petición. Solo la de contacto genera una página con vista previa; las de API, autenticación y genérica generan archivos de código sin vista previa.
-- Las pruebas de interacción de la vista previa están pensadas para formularios de contacto (campos `name`, `email`, `subject`, `message`).
+- La demo tiene 7 tipos de página. Las peticiones que no encajan en ninguno usan la aplicación de lista genérica con el título de la petición: siempre hay una página que ver, pero no está hecha a medida.
+- Las pruebas específicas solo existen para las páginas del catálogo; las páginas de un modelo real reciben la prueba de humo.
 - La demo no incluye ninguna eliminación de archivos. El motor y la UI las soportan y están cubiertas por tests.
 - El rate limiting y el historial en memoria son por instancia. Para flujos LLM largos convendría una cola de trabajos.
 

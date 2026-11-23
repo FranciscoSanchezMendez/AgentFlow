@@ -322,6 +322,19 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.01em; marg
   .device-mobile .ws-frame { border-radius: 0; box-shadow: none; }
 }
 
+.ws-live { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; cursor: pointer; font-size: 13px; color: var(--text-2); }
+.ws-live:hover { border-color: var(--violet); }
+.ws-live strong { color: var(--green); }
+.ws-live code { font-family: var(--mono); color: var(--text); }
+.ws-live span:nth-child(2) { flex: 1; min-width: 0; }
+.ws-live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.ws-live.is-running { border-color: #2c4a3d; }
+.ws-live.is-running .ws-live-dot { animation: pulse 1s ease-in-out infinite; }
+.ws-live-cta { color: var(--violet); font-weight: 600; white-space: nowrap; }
+.ws-suite { margin: 0 0 6px; font-size: 12px; color: var(--violet); font-weight: 600; }
+.workspace .empty .btn { margin-top: 10px; }
+@media (max-width: 600px) { .ws-live-cta { display: none; } }
+
 /* Responsive */
 @media (max-width: 1180px) {
   .layout { grid-template-columns: minmax(0, 1fr); }
