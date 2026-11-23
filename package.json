@@ -4,7 +4,7 @@
   "private": true,
   "description": "Plataforma multiagente (Orchestrator, Develop, Testing) con Next.js, Supabase y modo demo.",
   "engines": {
-    "node": ">=20.9"
+    "node": "22.x"
   },
   "scripts": {
     "dev": "next dev",

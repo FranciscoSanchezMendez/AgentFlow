@@ -89,7 +89,7 @@ Con el límite por defecto (3) el ejemplo del formulario termina con 3/3 tareas 
 
 ## Requisitos
 
-- **Node.js 20.9 o superior** (recomendado **22 LTS**; Supabase JS avisa de que dejará de dar soporte a Node 20).
+- **Node.js 22 LTS** (fijado en `package.json` con `"engines": { "node": "22.x" }`, que es la versión que usará Vercel). Node 20.9+ también funciona en local, con un aviso de npm.
 - npm 10+.
 - Opcional: un proyecto de Supabase y una API key de Anthropic.
 

@@ -1,9 +1,8 @@
 import type { Metadata, Viewport } from 'next';
-import { DM_Sans, Space_Grotesk } from 'next/font/google';
 import './globals.css';
 
-const body = DM_Sans({ subsets: ['latin'], variable: '--font-body', display: 'swap' });
-const display = Space_Grotesk({ subsets: ['latin'], variable: '--font-display', weight: ['500', '600', '700'], display: 'swap' });
+// Se usan fuentes del sistema (definidas en globals.css) para que la compilación
+// no dependa de descargar fuentes de Google en tiempo de build.
 
 export const metadata: Metadata = {
   title: 'AgentFlow · Equipo multiagente',
@@ -18,7 +17,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es" className={`${body.variable} ${display.variable}`}>
+    <html lang="es">
       <body>{children}</body>
     </html>
   );
