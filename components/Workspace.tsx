@@ -28,10 +28,37 @@ export interface WorkspaceFocus {
   nonce: number;
 }
 
-export function Workspace({ run, focus }: { run: Run | null; focus: WorkspaceFocus | null }) {
-  const changes = useMemo(() => run?.changes ?? [], [run?.changes]);
+/** Etiqueta de una tarea: «T2», o «#3 · T2» cuando el hilo tiene varias implementaciones. */
+export type TaskLabel = (taskId: string) => string;
+
+export function Workspace({
+  run,
+  focus,
+  history = [],
+}: {
+  run: Run | null;
+  focus: WorkspaceFocus | null;
+  /** Implementaciones activas anteriores del hilo: su trabajo es la memoria del workspace. */
+  history?: Run[];
+}) {
+  const changes = useMemo(() => [...history.flatMap((r) => r.changes), ...(run?.changes ?? [])], [history, run?.changes]);
   const steps = useMemo(() => workspaceSteps(changes), [changes]);
-  const tasks = useMemo(() => new Map((run?.tasks ?? []).map((t) => [t.id, t])), [run?.tasks]);
+  const tasks = useMemo(
+    () => new Map([...history.flatMap((r) => r.tasks), ...(run?.tasks ?? [])].map((t) => [t.id, t])),
+    [history, run?.tasks],
+  );
+  const iterations = useMemo(() => [...history.flatMap((r) => r.iterations), ...(run?.iterations ?? [])], [history, run?.iterations]);
+  const runNumber = useMemo(() => {
+    const map = new Map(history.map((r, i) => [r.id, i + 1]));
+    if (run) map.set(run.id, history.length + 1);
+    return map;
+  }, [history, run]);
+  const label: TaskLabel = (taskId) => {
+    const task = tasks.get(taskId);
+    const t = `T${(task?.position ?? 0) + 1}`;
+    return history.length > 0 && task ? `#${runNumber.get(task.runId) ?? '?'} · ${t}` : t;
+  };
+  const memoryUpto = history.reduce((n, r) => n + r.changes.length, 0);
 
   const [chosenTab, setTab] = useState<Tab | null>(null); // null = automático
   const [stepIdx, setStepIdx] = useState<number | null>(null); // null = seguir el último
@@ -62,7 +89,7 @@ export function Workspace({ run, focus }: { run: Run | null; focus: WorkspaceFoc
   const files = useMemo(() => buildWorkspace(changes, upto), [changes, upto]);
   const visibleChanges = useMemo(() => changes.slice(0, upto), [changes, upto]);
   const snapshot = useMemo(() => snapshotOf(files), [files]);
-  const stepVerdict = step ? findIteration(run, step.taskId, step.iteration) : undefined;
+  const stepVerdict = step ? findIteration(iterations, step.taskId, step.iteration) : undefined;
 
   const counts = useMemo(() => {
     const c = { created: 0, modified: 0, deleted: 0 };
@@ -107,7 +134,7 @@ export function Workspace({ run, focus }: { run: Run | null; focus: WorkspaceFoc
         >
           <span className="ws-live-dot" aria-hidden />
           <span>
-            <strong>Develop</strong> {KIND_VERB[lastChange.kind]} <code>{lastChange.path}</code> · T{(lastTask?.position ?? 0) + 1} «{lastTask?.title}» · iteración{' '}
+            <strong>Develop</strong> {KIND_VERB[lastChange.kind]} <code>{lastChange.path}</code> · {label(lastChange.taskId)} «{lastTask?.title}» · iteración{' '}
             {lastChange.iteration}
           </span>
           <span className="ws-live-cta">Ver cambio →</span>
@@ -126,10 +153,10 @@ export function Workspace({ run, focus }: { run: Run | null; focus: WorkspaceFoc
             <select id="ws-step" value={activeStep} onChange={(e) => setStepIdx(Number(e.target.value) === steps.length - 1 ? null : Number(e.target.value))}>
               {steps.map((s, i) => {
                 const task = tasks.get(s.taskId);
-                const verdict = findIteration(run, s.taskId, s.iteration);
+                const verdict = findIteration(iterations, s.taskId, s.iteration);
                 return (
                   <option key={`${s.taskId}-${s.iteration}`} value={i}>
-                    {`Paso ${i + 1} · T${(task?.position ?? 0) + 1} ${task?.title ?? ''} · iteración ${s.iteration}${verdict ? (verdict.passed ? ' · ✓ aprobada' : ' · ✕ con fallos') : ''}${i === steps.length - 1 ? ' (última)' : ''}`}
+                    {`Paso ${i + 1} · ${label(s.taskId)} ${task?.title ?? ''} · iteración ${s.iteration}${verdict ? (verdict.passed ? ' · ✓ aprobada' : ' · ✕ con fallos') : ''}${s.upto <= memoryUpto ? ' · memoria del hilo' : ''}${i === steps.length - 1 ? ' (última)' : ''}`}
                   </option>
                 );
               })}
@@ -164,12 +191,13 @@ export function Workspace({ run, focus }: { run: Run | null; focus: WorkspaceFoc
               files={files}
               changedNow={new Set(step?.paths ?? [])}
               tasks={tasks}
+              label={label}
               selectedPath={selectedPath}
               onSelect={setSelectedPath}
             />
           )}
           {tab === 'changes' && (
-            <ChangesView changes={visibleChanges} tasks={tasks} selectedId={selectedChangeId} onSelect={setSelectedChangeId} />
+            <ChangesView changes={visibleChanges} tasks={tasks} label={label} selectedId={selectedChangeId} onSelect={setSelectedChangeId} />
           )}
           {tab === 'preview' && (
             <PreviewView snapshot={snapshot} versionKey={`${run?.id}-${upto}`} onShowFiles={() => setTab('files')} />
@@ -189,8 +217,8 @@ export function Workspace({ run, focus }: { run: Run | null; focus: WorkspaceFoc
   );
 }
 
-function findIteration(run: Run | null, taskId: string, number: number): Iteration | undefined {
-  return run?.iterations.find((i) => i.taskId === taskId && i.number === number);
+function findIteration(iterations: Iteration[], taskId: string, number: number): Iteration | undefined {
+  return iterations.find((i) => i.taskId === taskId && i.number === number);
 }
 
 /* ----------------------------- Archivos ----------------------------- */
@@ -199,12 +227,14 @@ function FilesView({
   files,
   changedNow,
   tasks,
+  label,
   selectedPath,
   onSelect,
 }: {
   files: Map<string, WorkspaceFile>;
   changedNow: Set<string>;
   tasks: Map<string, Task>;
+  label: TaskLabel;
   selectedPath: string | null;
   onSelect: (path: string) => void;
 }) {
@@ -244,7 +274,7 @@ function FilesView({
             <span className="muted">{languageOf(current.path)}</span>
             <Badge kind={current.status === 'created' ? 'completed' : 'in_review'}>{current.status === 'created' ? 'Nuevo' : 'Modificado'}</Badge>
             <span className="muted">
-              Último cambio: T{(tasks.get(current.taskId)?.position ?? 0) + 1} · iteración {current.iteration}
+              Último cambio: {label(current.taskId)} · iteración {current.iteration}
             </span>
           </div>
           <CodeBlock content={current.content} />
@@ -289,11 +319,13 @@ function CodeBlock({ content }: { content: string }) {
 function ChangesView({
   changes,
   tasks,
+  label,
   selectedId,
   onSelect,
 }: {
   changes: FileChange[];
   tasks: Map<string, Task>;
+  label: TaskLabel;
   selectedId: string | null;
   onSelect: (id: string) => void;
 }) {
@@ -314,7 +346,7 @@ function ChangesView({
                 <span className={`ws-kind kind-${c.kind}`}>{KIND_LABEL[c.kind]}</span>
                 <span className="ws-change-path">{c.path}</span>
                 <span className="ws-change-meta">
-                  T{(task?.position ?? 0) + 1} · it. {c.iteration} · <span className="add">+{stats.added}</span> <span className="del">−{stats.removed}</span>
+                  {label(c.taskId)} · it. {c.iteration} · <span className="add">+{stats.added}</span> <span className="del">−{stats.removed}</span>
                 </span>
               </button>
             </li>

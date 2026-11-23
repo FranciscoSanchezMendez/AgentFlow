@@ -146,8 +146,16 @@ export class AnthropicProvider implements AgentProvider {
     this.label = `Anthropic · ${this.model}`;
   }
 
-  async plan({ prompt }: PlanInput): Promise<PlanOutput> {
-    const out = await this.callJson<PlanOutput>(SYSTEM.orchestrator, `Petición del usuario:\n${prompt}`, PLAN_SCHEMA);
+  async plan({ prompt, context }: PlanInput): Promise<PlanOutput> {
+    const parts = [`Petición del usuario:\n${prompt}`];
+    if (context && (context.history.length > 0 || Object.keys(context.files).length > 0)) {
+      parts.push(
+        'Esta petición continúa un hilo de desarrollo. Planifica cambios incrementales sobre el workspace existente, sin rehacer lo que ya funciona.',
+        `Peticiones anteriores del hilo:\n${context.history.map((h, i) => `${i + 1}. ${h}`).join('\n') || '(ninguna)'}`,
+        `Workspace actual:\n${formatWorkspace(context.files)}`,
+      );
+    }
+    const out = await this.callJson<PlanOutput>(SYSTEM.orchestrator, parts.join('\n\n'), PLAN_SCHEMA);
     if (!Array.isArray(out.tasks) || out.tasks.length === 0) {
       throw new Error('El Orchestrator no devolvió ninguna tarea.');
     }

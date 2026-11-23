@@ -10,6 +10,7 @@ import type {
 } from '../provider';
 import { staticReview } from '../provider';
 import { fillPlaceholders, findDemoTask, pickDomain, renderTemplate, type DemoDomain, type DemoTask } from './catalog';
+import { applyPatch, fillFollowup, findFollowupTask, pickFollowup, type FollowupTask } from './followups';
 
 const FEEDBACK_ID = /^\[([\w-]+)\]/;
 
@@ -26,7 +27,27 @@ export class DemoProvider implements AgentProvider {
   readonly mode = 'demo' as const;
   readonly label = 'Demo determinista (sin coste)';
 
-  async plan({ prompt }: PlanInput): Promise<PlanOutput> {
+  async plan({ prompt, context }: PlanInput): Promise<PlanOutput> {
+    const existing = Object.keys(context?.files ?? {});
+    if (existing.length > 0) {
+      // Hilo con trabajo previo: la petición se trata como una mejora incremental.
+      const followup = pickFollowup(prompt);
+      const previous = context?.history.length ?? 0;
+      return {
+        rationale: `Este hilo ya tiene ${existing.length} archivo(s) (${existing.join(', ')}) de ${previous} implementación(es) anterior(es). Trato la petición como una mejora sobre ese trabajo (${followup.label}): ${followup.rationale}`,
+        tasks: followup.tasks.map((t) => ({
+          title: t.title,
+          description: t.description,
+          acceptanceCriteria: t.criteria.map(({ id, description, file, expect }) => ({
+            id,
+            description,
+            file,
+            expect: expect.map((e) => fillFollowup(e, prompt)),
+          })),
+        })),
+      };
+    }
+
     const domain = pickDomain(prompt);
     return {
       rationale: `Detecto una petición de tipo «${domain.label}». La divido en ${domain.tasks.length} tareas de desarrollo con criterios verificables sobre archivos concretos, más una validación de integración final.`,
@@ -39,6 +60,9 @@ export class DemoProvider implements AgentProvider {
   }
 
   async implement({ prompt, task, attempt, feedback, workspace }: ImplementInput): Promise<ImplementOutput> {
+    const followup = findFollowupTask(task.title);
+    if (followup) return implementFollowup(followup.task, prompt, attempt, feedback, workspace);
+
     const found = findDemoTask(task.title, prompt);
     if (!found) {
       // Tarea desconocida (p. ej. planificada por otro proveedor): un archivo con lo pedido.
@@ -110,11 +134,47 @@ function feedbackIds(feedback: string[]): Set<string> {
  * manteniendo los demás pendientes. Así un límite de iteraciones bajo puede
  * hacer fallar la tarea, igual que ocurriría con un agente real.
  */
-function omittedCriteria(template: DemoTask, attempt: number, feedback: string[]): Set<string> {
+function omittedCriteria(
+  template: { misses: number; criteria: { id: string }[] },
+  attempt: number,
+  feedback: string[],
+): Set<string> {
   if (attempt <= 1) {
     const misses = Math.min(template.misses, template.criteria.length);
     return new Set(template.criteria.slice(template.criteria.length - misses).map((c) => c.id));
   }
   const pending = [...feedbackIds(feedback)].filter((id) => template.criteria.some((c) => c.id === id));
   return new Set(pending.slice(1));
+}
+
+/**
+ * Mejora incremental: aplica los parches de la tarea sobre el workspace actual.
+ * Solo devuelve los archivos que realmente cambian.
+ */
+function implementFollowup(
+  task: FollowupTask,
+  prompt: string,
+  attempt: number,
+  feedback: string[],
+  workspace: Record<string, string>,
+): ImplementOutput {
+  const omitted = omittedCriteria(task, attempt, feedback);
+  const next: Record<string, string> = { ...workspace };
+  for (const raw of task.criteria) {
+    if (omitted.has(raw.id)) continue;
+    const criterion = { ...raw, expect: raw.expect.map((e) => fillFollowup(e, prompt)), snippet: fillFollowup(raw.snippet, prompt) };
+    next[criterion.file] = applyPatch(next[criterion.file] ?? '', criterion);
+  }
+  const files = Object.keys(next)
+    .filter((path) => next[path] !== workspace[path])
+    .map((path) => ({ path, content: next[path] }));
+
+  const covered = task.criteria.length - omitted.size;
+  const notes =
+    files.length === 0
+      ? 'El workspace del hilo ya cumple esta parte; no hace falta modificar archivos.'
+      : attempt === 1
+        ? `Aplico la mejora sobre los archivos existentes del hilo: ${covered}/${task.criteria.length} criterios cubiertos.`
+        : `Corrijo según el feedback de Testing.${omitted.size > 0 ? ` Quedan ${omitted.size} punto(s) pendientes.` : ' Todos los puntos atendidos.'}`;
+  return { files, notes };
 }

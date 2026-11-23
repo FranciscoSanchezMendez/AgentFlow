@@ -335,6 +335,38 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.01em; marg
 .workspace .empty .btn { margin-top: 10px; }
 @media (max-width: 600px) { .ws-live-cta { display: none; } }
 
+/* Hilos de desarrollo */
+.thread-bar { display: flex; flex-direction: column; gap: 14px; border-color: #3a3157; background: linear-gradient(180deg, rgba(167, 139, 250, .07), transparent 80%), var(--surface); }
+.thread-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
+.thread-head h2 { font-size: 20px; margin-bottom: 4px; }
+.thread-head .muted { margin: 0; }
+.btn.danger { color: #fca5a5; border-color: #5a2a2e; }
+.btn.danger:hover:not(:disabled) { background: var(--red-bg); }
+.btn-danger { background: var(--red); color: #1b0c0e; }
+.thread-confirm { border: 1px solid #5a2a2e; background: var(--red-bg); border-radius: 12px; padding: 12px 14px; }
+.thread-confirm p { margin: 0 0 10px; font-size: 14px; color: #fecaca; }
+.thread-confirm-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.thread-runs { list-style: none; margin: 0; padding: 0; display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.thread-runs li { flex: 0 0 auto; }
+.thread-run { width: 230px; display: flex; flex-direction: column; gap: 6px; text-align: left; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; cursor: pointer; color: var(--text-2); }
+.thread-run:hover:not(:disabled) { border-color: var(--border-strong); }
+.thread-run.is-on { border-color: var(--violet); color: var(--text); }
+.thread-run:disabled { cursor: default; }
+.thread-run.is-discarded { opacity: .6; }
+.thread-run.is-discarded .thread-run-prompt { text-decoration: line-through; }
+.thread-run-no { font-family: var(--mono); font-size: 11px; color: var(--violet); font-weight: 700; }
+.thread-run-prompt { font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.thread-run-meta { display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--text-3); }
+.badge-discarded { background: var(--slate-bg); color: var(--text-3); text-decoration: line-through; }
+.request-hint { margin: 6px 0 12px; }
+.new-thread { width: 100%; justify-content: center; margin-bottom: 12px; }
+.new-thread.is-on { border-color: var(--violet); color: var(--text); }
+.history-last { font-size: 11px; color: var(--text-3); display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+@media (max-width: 600px) {
+  .thread-run { width: 200px; }
+  .thread-head .btn { width: 100%; justify-content: center; }
+}
+
 /* Responsive */
 @media (max-width: 1180px) {
   .layout { grid-template-columns: minmax(0, 1fr); }

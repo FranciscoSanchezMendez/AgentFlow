@@ -110,6 +110,8 @@ describe('readNdjson', () => {
 function base(): Run {
   return {
     id: 'run-1',
+    threadId: 'thread-1',
+    discarded: false,
     prompt: 'Prueba',
     status: 'passed',
     mode: 'demo',

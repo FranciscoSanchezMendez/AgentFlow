@@ -324,10 +324,40 @@ export const PREVIEW_TEST_SCRIPT = String.raw`
     }
   };
 
+  // Mejoras añadidas en el hilo: se comprueban si están presentes en la página.
+  function featureChecks() {
+    var toggle = $('#theme-toggle');
+    if (toggle) {
+      check('El selector de tema alterna el modo oscuro', function () {
+        var root = document.documentElement;
+        var before = root.classList.contains('theme-dark');
+        toggle.click();
+        var after = root.classList.contains('theme-dark');
+        toggle.click();
+        return { ok: before !== after, detail: before !== after ? 'Cambia entre tema claro y oscuro.' : 'El botón no cambia el tema.' };
+      });
+    }
+    if ($('footer.site-footer')) {
+      check('El pie de página muestra el año actual', function () {
+        var year = $('#footer-year');
+        var text = year ? year.textContent.trim() : '';
+        return { ok: text === String(new Date().getFullYear()), detail: text ? 'Año mostrado: ' + text : 'El año está vacío.' };
+      });
+    }
+    var news = $('#novedades-list');
+    if (news) {
+      check('«Novedades» muestra las mejoras pedidas en el hilo', function () {
+        var n = news.children.length;
+        return { ok: n > 0, detail: n + ' mejora(s) registradas.' };
+      });
+    }
+  }
+
   function run() {
     var app = document.body ? document.body.getAttribute('data-agentflow-app') : null;
     var name = app && SUITES[app] ? app : 'smoke';
     try { SUITES[name](); } catch (e) { results.push({ name: 'Ejecución de las pruebas', passed: false, detail: String(e && e.message ? e.message : e) }); }
+    featureChecks();
     var errors = window.__previewErrors || [];
     results.push({ name: 'Sin errores de JavaScript al cargar', passed: errors.length === 0, detail: errors.length ? errors.slice(0, 2).join(' · ') : 'Ningún error registrado.' });
     parent.postMessage({ source: '${PREVIEW_MESSAGE_SOURCE}', type: 'tests', suite: name, results: results }, '*');

@@ -26,6 +26,8 @@ export interface ArtifactFile {
 
 export interface PlanInput {
   prompt: string;
+  /** Memoria del hilo: peticiones anteriores y workspace actual. */
+  context?: { history: string[]; files: WorkspaceSnapshot };
 }
 
 export interface PlanOutput {

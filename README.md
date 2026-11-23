@@ -68,6 +68,30 @@ Cada tipo tiene 3 tareas y sigue el mismo ciclo: los criterios se verifican sobr
 
 ---
 
+## Hilos de desarrollo
+
+El historial se organiza en **hilos**. Un hilo es una línea de trabajo continua: cada petición que haces dentro de él es una nueva **implementación** que parte de lo que ya existe.
+
+- **Crear un hilo**: escribe una petición con "＋ Nuevo hilo" seleccionado. El título del hilo se deriva de la petición.
+- **Trabajar en un hilo**: ábrelo desde el panel "Hilos de desarrollo". La cabecera muestra sus implementaciones (#1, #2…) y la memoria del workspace. Cada nueva petición ("Implementar en este hilo"):
+  - parte del **workspace del hilo**, de modo que Develop modifica los archivos existentes y el diff muestra solo lo nuevo;
+  - pasa al Orchestrator las **peticiones anteriores** como contexto;
+  - termina con una **comprobación de regresión**: Testing vuelve a verificar los criterios de las tareas ya aprobadas en el hilo, y si algo se rompe, la implementación queda "con fallos".
+- **Memoria en el Workspace**: el selector de versión recorre todo el hilo. Los pasos de implementaciones anteriores aparecen como "memoria del hilo" y cada paso indica su implementación (`#2 · T1`). La vista previa y sus pruebas de interacción muestran el resultado acumulado.
+- **Descartar cambios**: "↶ Descartar última implementación" (con confirmación) quita del workspace del hilo los cambios de la última implementación activa. Se puede repetir para retroceder varias. Las descartadas siguen en el historial, tachadas, y se pueden abrir para ver qué hicieron. Solo se descarta la última, para no romper las implementaciones construidas encima.
+
+**En modo demo**, la primera implementación de un hilo usa los tipos de página descritos arriba. Las siguientes se aplican como **parches incrementales** sobre los archivos existentes:
+
+| Mejora | Ejemplos | Qué hace |
+| --- | --- | --- |
+| Modo oscuro | "añade un modo oscuro", "tema" | Estilos del tema en `styles.css`, `theme.js` con botón selector y respeto de la preferencia del sistema |
+| Pie de página | "pie de página", "footer", "copyright" | `<footer>` en `index.html`, estilos y `footer.js` con el año actual |
+| Cualquier otra | "añade un aviso de ofertas", "exportar a CSV"… | Sin plantilla específica: Develop registra la mejora en una sección "Novedades" de la página (`changelog.js`) |
+
+Las mejoras también tienen un fallo controlado en la primera iteración y su propia comprobación en las pruebas de interacción de la vista previa.
+
+---
+
 ## Cómo se visualizan los artefactos (Workspace)
 
 La sección **Workspace** del dashboard tiene:
@@ -205,7 +229,9 @@ Todas son solo de servidor.
 2. En **SQL Editor**, ejecuta `supabase-schema.sql`. Es idempotente: si ya tenías la versión anterior del esquema, añade la tabla `file_changes` y la columna `tasks.files` sin perder datos.
 3. Copia la URL y la *service role key* (**Project Settings → API**) a `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY`.
 
-Tablas: `runs`, `tasks`, `agent_messages`, `agent_logs`, `iterations` (resultados de cada prueba) y `file_changes` (contenido antes/después de cada cambio, en orden). El workspace de cualquier versión se reconstruye a partir de `file_changes`.
+Tablas: `threads` (hilos), `runs` (implementaciones, con `thread_id` y `discarded`), `tasks`, `agent_messages`, `agent_logs`, `iterations` (resultados de cada prueba) y `file_changes` (contenido antes/después de cada cambio, en orden). El workspace de un hilo se reconstruye a partir de los `file_changes` de sus implementaciones no descartadas.
+
+`supabase-schema.sql` incluye la migración a hilos: es aditiva e idempotente, y convierte cada ejecución anterior en un hilo con una implementación, sin perder datos. Si actualizas una instalación existente, vuelve a ejecutarlo **antes** de desplegar la nueva versión.
 
 Sin Supabase, el historial se guarda en memoria del servidor: un máximo de 50 ejecuciones, que se pierden al reiniciar. En Vercel cada instancia tiene su propia memoria.
 
@@ -222,7 +248,10 @@ La compilación no descarga recursos externos (se usan fuentes del sistema). `PO
 
 | Método | Ruta | Descripción |
 | --- | --- | --- |
-| `POST` | `/api/runs` | `{ "prompt": string (5–2000), "maxIterations"?: 1–10 }` → `application/x-ndjson` |
+| `POST` | `/api/runs` | `{ "prompt": string (5–2000), "maxIterations"?: 1–10, "threadId"?: uuid }` → `application/x-ndjson`. Sin `threadId` crea un hilo nuevo; con él implementa sobre la memoria del hilo (409 si ya hay una implementación en curso) |
+| `GET` | `/api/threads` | Últimos 30 hilos con su resumen |
+| `GET` | `/api/threads/:id` | Hilo completo con todas sus implementaciones |
+| `POST` | `/api/threads/:id/discard` | `{ "runId"?: uuid }`: descarta la última implementación activa (409 si se indica otra) |
 | `GET` | `/api/runs` | Últimas 30 ejecuciones |
 | `GET` | `/api/runs/:id` | Ejecución completa: tareas, mensajes, logs, iteraciones y cambios de archivos |
 | `GET` | `/api/health` | Modo, proveedor, persistencia y límites |
@@ -246,6 +275,14 @@ Cubren:
 - **Vistas previas en jsdom** (`tests/previewSuites.test.ts`): para los 7 tipos, carga la página generada en un DOM simulado y ejecuta su batería de pruebas de interacción. La versión final pasa todas y la que Testing rechazó falla al usarla. Las páginas desconocidas reciben la prueba de humo, que detecta errores de JavaScript.
 - **Artefactos de contacto**: la `validation.js` final valida bien y la primera tiene el fallo; el JS es sintácticamente válido; la página de preview está completa.
 - **Workspace**: saneado de rutas, reconstrucción por versión y documento de preview (CSP, recursos externos eliminados, escape de `</script>`).
+- **Hilos** (`tests/threads.test.ts`):
+  - Una implementación parte del workspace de la anterior y modifica sus archivos.
+  - La comprobación de regresión pasa y falla cuando corresponde.
+  - Varias mejoras encadenadas mantienen la página funcionando, comprobado en jsdom.
+  - Descartar solo afecta a la última implementación activa y saca sus cambios del workspace.
+  - Cada parche de mejora cumple su criterio y es idempotente.
+  - La petición se inserta en el JS de forma segura.
+  - API: crear, continuar, listar, descartar y validar hilos.
 - **Diff**, **validación**, **rate limiting**, **reductor de UI**, **NDJSON**, **persistencia en memoria**, **streaming** y **rutas de la API**.
 
 jsdom no reproduce todos los comportamientos del navegador. Por ejemplo, un fallo por un botón `id="reset"` que tapaba `form.reset()` solo apareció en Chrome y quedó cubierto con un test específico. Por eso las vistas previas también se verificaron en un navegador real. El modo LLM y Supabase no se prueban contra servicios reales, porque requieren credenciales y tienen coste.

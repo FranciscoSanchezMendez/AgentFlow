@@ -98,3 +98,34 @@ alter table public.agent_messages enable row level security;
 alter table public.agent_logs enable row level security;
 alter table public.iterations enable row level security;
 alter table public.file_changes enable row level security;
+
+-- ---------------------------------------------------------------------------
+-- Hilos de desarrollo (migración idempotente; conserva los datos existentes)
+-- ---------------------------------------------------------------------------
+create table if not exists public.threads (
+  id uuid primary key default gen_random_uuid(),
+  title text not null check (char_length(title) <= 120),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.runs add column if not exists thread_id uuid references public.threads(id) on delete cascade;
+alter table public.runs add column if not exists discarded boolean not null default false;
+
+-- Orden estable de eventos que comparten milisegundo.
+alter table public.agent_messages add column if not exists seq integer;
+alter table public.agent_logs add column if not exists seq integer;
+alter table public.iterations add column if not exists seq integer;
+
+-- Cada ejecución anterior a los hilos pasa a ser un hilo con una implementación.
+insert into public.threads (id, title, created_at, updated_at)
+  select r.id, left(r.prompt, 120), r.created_at, coalesce(r.finished_at, r.created_at)
+  from public.runs r
+  where r.thread_id is null
+  on conflict (id) do nothing;
+update public.runs set thread_id = id where thread_id is null;
+
+create index if not exists runs_thread_id_idx on public.runs (thread_id, created_at);
+create index if not exists threads_updated_at_idx on public.threads (updated_at desc);
+
+alter table public.threads enable row level security;

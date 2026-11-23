@@ -1,5 +1,6 @@
-import type { AgentProvider, ImplementOutput, PlannedTask } from '../agents/provider';
+import { staticReview, type AgentProvider, type ImplementOutput, type PlannedTask } from '../agents/provider';
 import type {
+  AcceptanceCriterion,
   AgentId,
   AgentMessage,
   AgentStatus,
@@ -23,6 +24,14 @@ export interface WorkflowOptions {
   signal?: AbortSignal;
   idFactory?: () => string;
   now?: () => Date;
+  /** Hilo al que pertenece la implementación (por defecto, uno nuevo con el id del run). */
+  threadId?: string;
+  /** Memoria del hilo: workspace resultante de las implementaciones anteriores. */
+  initialWorkspace?: Record<string, string>;
+  /** Peticiones anteriores del hilo, de la más antigua a la más reciente. */
+  history?: string[];
+  /** Criterios de implementaciones anteriores que deben seguir cumpliéndose. */
+  regressionCriteria?: AcceptanceCriterion[];
 }
 
 const INTEGRATION_TITLE = 'Validación de integración final';
@@ -47,8 +56,11 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
   const newId = options.idFactory ?? (() => crypto.randomUUID());
   const now = () => (options.now ? options.now() : new Date()).toISOString();
 
+  const runId = newId();
   const run: Run = {
-    id: newId(),
+    id: runId,
+    threadId: options.threadId ?? runId,
+    discarded: false,
     prompt,
     status: 'running',
     mode: provider.mode,
@@ -65,6 +77,12 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
     changes: [],
   };
   const workspace = new Map<string, string>();
+  for (const [rawPath, content] of Object.entries(options.initialWorkspace ?? {})) {
+    const path = sanitizePath(rawPath);
+    if (path && typeof content === 'string') workspace.set(path, content);
+  }
+  const history = options.history ?? [];
+  const regression = (options.regressionCriteria ?? []).filter((c) => c.expect && c.expect.length > 0);
 
   const emit = async (event: WorkflowEvent) => {
     if (onEvent) await onEvent(event);
@@ -158,9 +176,16 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
     await log('system', 'info', `Ejecución iniciada en modo ${provider.mode === 'demo' ? 'demo' : 'LLM'} (${provider.label}). Máx. ${maxIterations} iteraciones por tarea.`);
     await status('orchestrator', 'thinking', 'Analizando la petición');
     await log('orchestrator', 'info', 'Petición recibida. Analizando requisitos.');
+    if (history.length > 0 || workspace.size > 0) {
+      await log(
+        'orchestrator',
+        'info',
+        `Memoria del hilo: ${history.length} implementación(es) anterior(es) y ${workspace.size} archivo(s) en el workspace. Se trabajará sobre ellos.`,
+      );
+    }
     await pause();
 
-    const plan = await provider.plan({ prompt });
+    const plan = await provider.plan({ prompt, context: { history, files: Object.fromEntries(workspace) } });
     const devTasks: Task[] = [];
     for (const planned of plan.tasks) devTasks.push(await createTask(planned, 'develop', 'testing'));
     const integration = await createTask(
@@ -278,6 +303,19 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
       ],
       createdAt: now(),
     };
+    if (regression.length > 0) {
+      const check = staticReview(Object.fromEntries(workspace), regression);
+      const broken = check.results.filter((r) => !r.passed);
+      integrationIteration.results.push({
+        criterionId: 'regression',
+        name: 'Las implementaciones anteriores del hilo siguen cumpliéndose',
+        passed: broken.length === 0,
+        detail:
+          broken.length === 0
+            ? `${regression.length} criterio(s) de implementaciones anteriores verificados de nuevo.`
+            : `Se han roto ${broken.length} criterio(s): ${broken.map((r) => r.name).join('; ')}`,
+      });
+    }
     integrationIteration.passed = integrationIteration.results.every((r) => r.passed);
     run.iterations.push(integrationIteration);
     await emit({ type: 'iteration', iteration: integrationIteration });

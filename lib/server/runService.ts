@@ -1,7 +1,8 @@
 import type { AgentProvider } from '../agents/provider';
 import { runWorkflow } from '../engine/workflow';
-import type { RunRepository } from '../persistence/repository';
+import type { RunRepository, ThreadInfo } from '../persistence/repository';
 import type { WorkflowEvent } from '../types';
+import type { ThreadContext } from './threads';
 
 export interface StreamRunOptions {
   prompt: string;
@@ -10,6 +11,10 @@ export interface StreamRunOptions {
   repository: RunRepository;
   stepDelayMs: number;
   signal?: AbortSignal;
+  /** Hilo de la implementación (nuevo o existente). */
+  thread?: ThreadInfo;
+  /** Memoria del hilo (workspace, peticiones previas y criterios de regresión). */
+  context?: ThreadContext;
 }
 
 /**
@@ -34,6 +39,10 @@ export function streamRun(options: StreamRunOptions): ReadableStream<Uint8Array>
 
       const persist = async (event: Extract<WorkflowEvent, { type: 'run_started' | 'run_finished' }>) => {
         try {
+          if (options.thread) {
+            const updatedAt = event.run.finishedAt ?? event.run.createdAt;
+            await options.repository.saveThread({ ...options.thread, updatedAt });
+          }
           await options.repository.saveRun(event.run);
         } catch (error) {
           console.error('[agentflow] Error de persistencia:', error);
@@ -58,6 +67,10 @@ export function streamRun(options: StreamRunOptions): ReadableStream<Uint8Array>
           provider: options.provider,
           stepDelayMs: options.stepDelayMs,
           signal: options.signal,
+          threadId: options.thread?.id,
+          initialWorkspace: options.context?.initialWorkspace,
+          history: options.context?.history,
+          regressionCriteria: options.context?.regressionCriteria,
           onEvent: async (event) => {
             write(event);
             if (event.type === 'run_started' || event.type === 'run_finished') await persist(event);

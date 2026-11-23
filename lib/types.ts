@@ -117,6 +117,10 @@ export interface Iteration {
 
 export interface Run {
   id: string;
+  /** Hilo de desarrollo al que pertenece la implementación. */
+  threadId: string;
+  /** Si es true, sus cambios ya no forman parte del workspace del hilo. */
+  discarded: boolean;
   prompt: string;
   status: RunStatus;
   mode: RunMode;
@@ -132,6 +136,30 @@ export interface Run {
   iterations: Iteration[];
   /** Historial completo de cambios de archivos (el workspace se reconstruye a partir de él). */
   changes: FileChange[];
+}
+
+/**
+ * Hilo de desarrollo: una sucesión de implementaciones (runs) sobre el mismo
+ * workspace. El workspace del hilo es la suma de los cambios de sus runs activos.
+ */
+export interface Thread {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  /** Implementaciones en orden cronológico. */
+  runs: Run[];
+}
+
+export interface ThreadSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  runCount: number;
+  activeRunCount: number;
+  lastStatus: RunStatus | null;
+  lastPrompt: string | null;
 }
 
 /** Resumen ligero para el historial. */
@@ -178,5 +206,29 @@ export function summarizeRun(run: Run): RunSummary {
     completedTasks: run.tasks.filter((t) => t.status === 'completed').length,
     createdAt: run.createdAt,
     finishedAt: run.finishedAt,
+  };
+}
+
+/** Implementaciones activas (no descartadas) anteriores a `beforeRunId` (o todas). */
+export function activeRunsBefore(thread: Pick<Thread, 'runs'>, beforeRunId?: string): Run[] {
+  const out: Run[] = [];
+  for (const run of thread.runs) {
+    if (run.id === beforeRunId) break;
+    if (!run.discarded) out.push(run);
+  }
+  return out;
+}
+
+export function summarizeThread(thread: Thread): ThreadSummary {
+  const last = thread.runs.at(-1);
+  return {
+    id: thread.id,
+    title: thread.title,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    runCount: thread.runs.length,
+    activeRunCount: thread.runs.filter((r) => !r.discarded).length,
+    lastStatus: last?.status ?? null,
+    lastPrompt: last?.prompt ?? null,
   };
 }

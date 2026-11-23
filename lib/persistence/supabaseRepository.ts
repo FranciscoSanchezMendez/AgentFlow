@@ -1,6 +1,19 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { AgentMessage, FileChange, Iteration, LogEntry, Run, RunSummary, Task } from '../types';
-import type { RunRepository } from './repository';
+import {
+  summarizeThread,
+  type AgentMessage,
+  type FileChange,
+  type Iteration,
+  type LogEntry,
+  type Run,
+  type RunSummary,
+  type Task,
+  type Thread,
+  type ThreadSummary,
+} from '../types';
+import type { RunRepository, ThreadInfo } from './repository';
+
+type Row = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 /**
  * Persistencia en Supabase (Postgres). Se usa exclusivamente en el servidor con
@@ -12,10 +25,23 @@ export class SupabaseRunRepository implements RunRepository {
 
   constructor(private readonly db: SupabaseClient) {}
 
+  async saveThread(thread: ThreadInfo): Promise<void> {
+    await check(
+      this.db.from('threads').upsert({
+        id: thread.id,
+        title: thread.title.slice(0, 120),
+        created_at: thread.createdAt,
+        updated_at: thread.updatedAt,
+      }),
+    );
+  }
+
   async saveRun(run: Run): Promise<void> {
     await check(
       this.db.from('runs').upsert({
         id: run.id,
+        thread_id: run.threadId,
+        discarded: run.discarded,
         prompt: run.prompt,
         status: run.status,
         mode: run.mode,
@@ -35,23 +61,104 @@ export class SupabaseRunRepository implements RunRepository {
   }
 
   async getRun(id: string): Promise<Run | null> {
-    const { data: r, error } = await this.db.from('runs').select('*').eq('id', id).maybeSingle();
+    const { data, error } = await this.db.from('runs').select('*').eq('id', id).maybeSingle();
     if (error) throw new Error(`Supabase: ${error.message}`);
-    if (!r) return null;
+    if (!data) return null;
+    return (await this.loadRuns([data]))[0];
+  }
 
+  async listRuns(limit = 20): Promise<RunSummary[]> {
+    const { data, error } = await this.db
+      .from('runs')
+      .select('id,prompt,status,mode,max_iterations,total_iterations,created_at,finished_at,tasks(status)')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new Error(`Supabase: ${error.message}`);
+    return (data ?? []).map((r: Row) => {
+      const tasks = (r.tasks as { status: string }[] | null) ?? [];
+      return {
+        id: r.id,
+        prompt: r.prompt,
+        status: r.status,
+        mode: r.mode,
+        maxIterations: r.max_iterations,
+        totalIterations: r.total_iterations,
+        taskCount: tasks.length,
+        completedTasks: tasks.filter((t) => t.status === 'completed').length,
+        createdAt: r.created_at,
+        finishedAt: r.finished_at,
+      };
+    });
+  }
+
+  async getThread(id: string): Promise<Thread | null> {
+    const { data: t, error } = await this.db.from('threads').select('*').eq('id', id).maybeSingle();
+    if (error) throw new Error(`Supabase: ${error.message}`);
+    if (!t) return null;
+    const { data: runRows, error: runsError } = await this.db
+      .from('runs')
+      .select('*')
+      .eq('thread_id', id)
+      .order('created_at', { ascending: true })
+      .limit(50);
+    if (runsError) throw new Error(`Supabase: ${runsError.message}`);
+    return { id: t.id, title: t.title, createdAt: t.created_at, updatedAt: t.updated_at, runs: await this.loadRuns(runRows ?? []) };
+  }
+
+  async listThreads(limit = 30): Promise<ThreadSummary[]> {
+    const { data, error } = await this.db
+      .from('threads')
+      .select('id,title,created_at,updated_at,runs(id,status,discarded,prompt,created_at)')
+      .order('updated_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new Error(`Supabase: ${error.message}`);
+    return (data ?? [])
+      .map((t: Row) => {
+        const runs = ((t.runs as Row[] | null) ?? []).sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+        return summarizeThread({
+          id: t.id,
+          title: t.title,
+          createdAt: t.created_at,
+          updatedAt: t.updated_at,
+          runs: runs.map((r) => ({ id: r.id, status: r.status, discarded: !!r.discarded, prompt: r.prompt }) as Run),
+        });
+      })
+      .filter((t) => t.runCount > 0);
+  }
+
+  async setRunDiscarded(runId: string, discarded: boolean): Promise<void> {
+    await check(this.db.from('runs').update({ discarded }).eq('id', runId));
+  }
+
+  /** Carga los datos completos de varias implementaciones con una consulta por tabla. */
+  private async loadRuns(rows: Row[]): Promise<Run[]> {
+    if (rows.length === 0) return [];
+    const ids = rows.map((r) => r.id);
     const [tasks, messages, logs, iterations, changes] = await Promise.all([
-      this.db.from('tasks').select('*').eq('run_id', id).order('position'),
-      this.db.from('agent_messages').select('*').eq('run_id', id).order('created_at'),
-      this.db.from('agent_logs').select('*').eq('run_id', id).order('created_at'),
-      this.db.from('iterations').select('*').eq('run_id', id).order('created_at'),
-      this.db.from('file_changes').select('*').eq('run_id', id).order('seq'),
+      this.db.from('tasks').select('*').in('run_id', ids).order('position'),
+      this.db.from('agent_messages').select('*').in('run_id', ids).order('seq').order('created_at'),
+      this.db.from('agent_logs').select('*').in('run_id', ids).order('seq').order('created_at'),
+      this.db.from('iterations').select('*').in('run_id', ids).order('seq').order('created_at'),
+      this.db.from('file_changes').select('*').in('run_id', ids).order('seq'),
     ]);
     for (const res of [tasks, messages, logs, iterations, changes]) {
       if (res.error) throw new Error(`Supabase: ${res.error.message}`);
     }
+    const byRun = (list: Row[] | null) => {
+      const map = new Map<string, Row[]>();
+      for (const row of list ?? []) map.set(row.run_id, [...(map.get(row.run_id) ?? []), row]);
+      return (id: string) => map.get(id) ?? [];
+    };
+    const tasksOf = byRun(tasks.data);
+    const messagesOf = byRun(messages.data);
+    const logsOf = byRun(logs.data);
+    const iterationsOf = byRun(iterations.data);
+    const changesOf = byRun(changes.data);
 
-    return {
+    return rows.map((r) => ({
       id: r.id,
+      threadId: r.thread_id ?? r.id,
+      discarded: !!r.discarded,
       prompt: r.prompt,
       status: r.status,
       mode: r.mode,
@@ -61,7 +168,7 @@ export class SupabaseRunRepository implements RunRepository {
       error: r.error,
       createdAt: r.created_at,
       finishedAt: r.finished_at,
-      tasks: (tasks.data ?? []).map(
+      tasks: tasksOf(r.id).map(
         (t): Task => ({
           id: t.id,
           runId: t.run_id,
@@ -78,7 +185,7 @@ export class SupabaseRunRepository implements RunRepository {
           updatedAt: t.updated_at,
         }),
       ),
-      messages: (messages.data ?? []).map(
+      messages: messagesOf(r.id).map(
         (m): AgentMessage => ({
           id: m.id,
           runId: m.run_id,
@@ -91,10 +198,10 @@ export class SupabaseRunRepository implements RunRepository {
           createdAt: m.created_at,
         }),
       ),
-      logs: (logs.data ?? []).map(
+      logs: logsOf(r.id).map(
         (l): LogEntry => ({ id: l.id, runId: l.run_id, agent: l.agent, level: l.level, message: l.message, createdAt: l.created_at }),
       ),
-      changes: (changes.data ?? []).map(
+      changes: changesOf(r.id).map(
         (c): FileChange => ({
           id: c.id,
           runId: c.run_id,
@@ -107,34 +214,10 @@ export class SupabaseRunRepository implements RunRepository {
           createdAt: c.created_at,
         }),
       ),
-      iterations: (iterations.data ?? []).map(
+      iterations: iterationsOf(r.id).map(
         (i): Iteration => ({ id: i.id, runId: i.run_id, taskId: i.task_id, number: i.number, passed: i.passed, results: i.results ?? [], createdAt: i.created_at }),
       ),
-    };
-  }
-
-  async listRuns(limit = 20): Promise<RunSummary[]> {
-    const { data, error } = await this.db
-      .from('runs')
-      .select('id,prompt,status,mode,max_iterations,total_iterations,created_at,finished_at,tasks(status)')
-      .order('created_at', { ascending: false })
-      .limit(limit);
-    if (error) throw new Error(`Supabase: ${error.message}`);
-    return (data ?? []).map((r) => {
-      const tasks = (r.tasks as { status: string }[] | null) ?? [];
-      return {
-        id: r.id,
-        prompt: r.prompt,
-        status: r.status,
-        mode: r.mode,
-        maxIterations: r.max_iterations,
-        totalIterations: r.total_iterations,
-        taskCount: tasks.length,
-        completedTasks: tasks.filter((t) => t.status === 'completed').length,
-        createdAt: r.created_at,
-        finishedAt: r.finished_at,
-      };
-    });
+    }));
   }
 }
 
@@ -159,9 +242,10 @@ const taskRow = (t: Task) => ({
   updated_at: t.updatedAt,
 });
 
-const messageRow = (m: AgentMessage) => ({
+const messageRow = (m: AgentMessage, seq: number) => ({
   id: m.id,
   run_id: m.runId,
+  seq,
   from_agent: m.from,
   to_agent: m.to,
   kind: m.kind,
@@ -171,18 +255,20 @@ const messageRow = (m: AgentMessage) => ({
   created_at: m.createdAt,
 });
 
-const logRow = (l: LogEntry) => ({
+const logRow = (l: LogEntry, seq: number) => ({
   id: l.id,
   run_id: l.runId,
+  seq,
   agent: l.agent,
   level: l.level,
   message: l.message,
   created_at: l.createdAt,
 });
 
-const iterationRow = (i: Iteration) => ({
+const iterationRow = (i: Iteration, seq: number) => ({
   id: i.id,
   run_id: i.runId,
+  seq,
   task_id: i.taskId,
   number: i.number,
   passed: i.passed,
