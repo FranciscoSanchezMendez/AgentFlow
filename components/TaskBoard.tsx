@@ -4,7 +4,7 @@ import { useState } from 'react';
 import type { Run, Task } from '@/lib/types';
 import { AGENT_META, Badge, TASK_STATUS_LABEL } from './ui';
 
-export function TaskBoard({ run }: { run: Run | null }) {
+export function TaskBoard({ run, onOpenFile }: { run: Run | null; onOpenFile: (path: string) => void }) {
   const tasks = run?.tasks ?? [];
   const completed = tasks.filter((t) => t.status === 'completed').length;
 
@@ -31,7 +31,7 @@ export function TaskBoard({ run }: { run: Run | null }) {
       ) : (
         <ol className="tasks">
           {tasks.map((task) => (
-            <TaskItem key={task.id} task={task} run={run!} />
+            <TaskItem key={task.id} task={task} run={run!} onOpenFile={onOpenFile} />
           ))}
         </ol>
       )}
@@ -39,7 +39,7 @@ export function TaskBoard({ run }: { run: Run | null }) {
   );
 }
 
-function TaskItem({ task, run }: { task: Task; run: Run }) {
+function TaskItem({ task, run, onOpenFile }: { task: Task; run: Run; onOpenFile: (path: string) => void }) {
   const [open, setOpen] = useState(false);
   const iterations = run.iterations.filter((i) => i.taskId === task.id);
   const last = iterations.at(-1);
@@ -92,18 +92,27 @@ function TaskItem({ task, run }: { task: Task; run: Run }) {
                   <span aria-hidden>{state === 'pass' ? '✓' : state === 'fail' ? '✕' : '○'}</span>
                   <div>
                     {c.description}
+                    {c.file && <span className="crit-file">{c.file}</span>}
                     {result && !result.passed && <small>{result.detail}</small>}
                   </div>
                 </li>
               );
             })}
           </ul>
-          {task.code && (
+          {task.files.length > 0 && (
             <>
-              <h4>Código entregado por Develop</h4>
-              <pre className="code">
-                <code>{task.code}</code>
-              </pre>
+              <h4>Archivos de esta tarea</h4>
+              <div className="task-files">
+                {task.files.map((path) => {
+                  const kinds = run.changes.filter((c) => c.taskId === task.id && c.path === path);
+                  const label = kinds[0]?.kind === 'created' ? 'nuevo' : kinds[0]?.kind === 'deleted' ? 'eliminado' : 'modificado';
+                  return (
+                    <button key={path} type="button" className="file-chip" onClick={() => onOpenFile(path)} title="Abrir en el Workspace">
+                      {path} <small>· {label} · {kinds.length} cambio(s)</small>
+                    </button>
+                  );
+                })}
+              </div>
             </>
           )}
         </div>

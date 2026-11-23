@@ -58,6 +58,8 @@ export function applyEvent(state: DashboardState, event: WorkflowEvent): Dashboa
     case 'task_created':
     case 'task_updated':
       return { ...state, run: { ...run, tasks: upsert(run.tasks, event.task).sort((a, b) => a.position - b.position) } };
+    case 'file_changed':
+      return { ...state, run: { ...run, changes: [...run.changes, event.change] } };
     case 'message':
       return { ...state, run: { ...run, messages: [...run.messages, event.message] } };
     case 'log':

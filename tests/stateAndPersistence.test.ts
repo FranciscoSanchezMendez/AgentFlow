@@ -23,6 +23,7 @@ describe('applyEvent (estado del dashboard)', () => {
     expect(state.run?.tasks.map((t) => t.status)).toEqual(final.tasks.map((t) => t.status));
     expect(state.run?.messages).toHaveLength(final.messages.length);
     expect(state.run?.logs).toHaveLength(final.logs.length);
+    expect(state.run?.changes.map((c) => c.path)).toEqual(final.changes.map((c) => c.path));
     expect(state.agents.orchestrator.status).toBe('done');
   });
 
@@ -122,5 +123,6 @@ function base(): Run {
     messages: [],
     logs: [],
     iterations: [],
+    changes: [],
   };
 }

@@ -21,9 +21,11 @@ export type RunMode = 'demo' | 'llm';
 export interface AcceptanceCriterion {
   id: string;
   description: string;
+  /** Archivo del workspace en el que se verifica el criterio (opcional). */
+  file?: string;
   /**
-   * Fragmentos que deben aparecer en el código para que el criterio se considere
-   * cumplido. Solo los usa el Testing determinista (modo demo o verificación estática).
+   * Fragmentos que deben aparecer en el archivo para que el criterio se considere
+   * cumplido. Los usa la verificación estática de Testing.
    */
   expect?: string[];
 }
@@ -39,9 +41,36 @@ export interface Task {
   status: TaskStatus;
   attempts: number;
   acceptanceCriteria: AcceptanceCriterion[];
-  code?: string;
+  /** Rutas del workspace creadas, modificadas o eliminadas por esta tarea. */
+  files: string[];
   feedback: string[];
   updatedAt: string;
+}
+
+export type FileChangeKind = 'created' | 'modified' | 'deleted';
+
+/** Cambio en un archivo del workspace producido por Develop. */
+export interface FileChange {
+  id: string;
+  runId: string;
+  taskId: string;
+  iteration: number;
+  path: string;
+  kind: FileChangeKind;
+  before: string | null;
+  after: string | null;
+  createdAt: string;
+}
+
+/** Estado de un archivo del workspace en un momento dado. */
+export interface WorkspaceFile {
+  path: string;
+  content: string;
+  /** Tipo del primer cambio (created) o del último (modified) que lo dejó en este estado. */
+  status: 'created' | 'modified';
+  taskId: string;
+  iteration: number;
+  changeId: string;
 }
 
 export interface AgentMessage {
@@ -72,6 +101,8 @@ export interface TestResult {
   name: string;
   passed: boolean;
   detail: string;
+  /** Archivo inspeccionado para este criterio. */
+  file?: string;
 }
 
 export interface Iteration {
@@ -99,6 +130,8 @@ export interface Run {
   messages: AgentMessage[];
   logs: LogEntry[];
   iterations: Iteration[];
+  /** Historial completo de cambios de archivos (el workspace se reconstruye a partir de él). */
+  changes: FileChange[];
 }
 
 /** Resumen ligero para el historial. */
@@ -120,6 +153,7 @@ export type WorkflowEvent =
   | { type: 'agent_status'; agent: AgentId; status: AgentStatus; activity: string }
   | { type: 'task_created'; task: Task }
   | { type: 'task_updated'; task: Task }
+  | { type: 'file_changed'; change: FileChange }
   | { type: 'message'; message: AgentMessage }
   | { type: 'log'; log: LogEntry }
   | { type: 'iteration'; iteration: Iteration }
@@ -128,8 +162,8 @@ export type WorkflowEvent =
 
 export const AGENTS: Record<AgentId, { name: string; role: string }> = {
   orchestrator: { name: 'Orchestrator', role: 'Planifica, descompone y asigna tareas' },
-  develop: { name: 'Develop', role: 'Implementa el código de cada tarea' },
-  testing: { name: 'Testing', role: 'Verifica, detecta errores y da feedback' },
+  develop: { name: 'Develop', role: 'Escribe y corrige los archivos de cada tarea' },
+  testing: { name: 'Testing', role: 'Inspecciona los archivos y valida criterios' },
 };
 
 export function summarizeRun(run: Run): RunSummary {

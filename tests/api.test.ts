@@ -42,7 +42,9 @@ describe('API /api/runs', () => {
     const detailRoute = await import('@/app/api/runs/[id]/route');
     const detail = await detailRoute.GET(new Request('http://localhost'), { params: Promise.resolve({ id: last.run.id }) });
     expect(detail.status).toBe(200);
-    expect((await detail.json()).run.tasks).toHaveLength(4);
+    const detailRun = (await detail.json()).run;
+    expect(detailRun.tasks).toHaveLength(4);
+    expect(detailRun.changes.length).toBeGreaterThan(0);
   });
 
   it('GET /api/runs/[id] valida el identificador', async () => {

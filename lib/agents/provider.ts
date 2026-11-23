@@ -16,6 +16,14 @@ export interface PlannedTask {
   acceptanceCriteria: AcceptanceCriterion[];
 }
 
+/** Archivos del workspace: ruta relativa → contenido. */
+export type WorkspaceSnapshot = Record<string, string>;
+
+export interface ArtifactFile {
+  path: string;
+  content: string;
+}
+
 export interface PlanInput {
   prompt: string;
 }
@@ -29,19 +37,24 @@ export interface ImplementInput {
   prompt: string;
   task: PlannedTask & { id: string };
   attempt: number;
-  previousCode?: string;
+  /** Estado actual del workspace (incluye el trabajo de tareas anteriores). */
+  workspace: WorkspaceSnapshot;
   feedback: string[];
 }
 
 export interface ImplementOutput {
-  code: string;
+  /** Archivos completos que Develop crea o reescribe. */
+  files: ArtifactFile[];
+  /** Rutas que Develop elimina. */
+  deleted?: string[];
   notes: string;
 }
 
 export interface ReviewInput {
   prompt: string;
   task: PlannedTask & { id: string };
-  code: string;
+  /** Workspace tras la entrega de Develop. */
+  files: WorkspaceSnapshot;
   attempt: number;
 }
 
@@ -55,29 +68,36 @@ export interface AgentProvider {
   readonly label: string;
   /** Orchestrator: descompone la petición en tareas. */
   plan(input: PlanInput): Promise<PlanOutput>;
-  /** Develop: implementa (o corrige) una tarea. */
+  /** Develop: crea o corrige los archivos de una tarea. */
   implement(input: ImplementInput): Promise<ImplementOutput>;
-  /** Testing: verifica una implementación contra sus criterios. */
+  /** Testing: inspecciona los archivos y valida los criterios de la tarea. */
   review(input: ReviewInput): Promise<ReviewOutput>;
 }
 
 /**
- * Verificación estática compartida: comprueba que el código contiene los
- * fragmentos esperados por cada criterio. Es real (no simulada): si falta un
- * fragmento, el test falla.
+ * Verificación estática compartida: abre el archivo asociado a cada criterio y
+ * comprueba que contiene los fragmentos esperados. Es real (no simulada): si el
+ * archivo no existe o falta un fragmento, la prueba falla con el motivo.
  */
-export function staticReview(code: string, criteria: AcceptanceCriterion[]): ReviewOutput {
+export function staticReview(files: WorkspaceSnapshot, criteria: AcceptanceCriterion[]): ReviewOutput {
+  const all = Object.values(files).join('\n');
   const results: TestResult[] = criteria.map((criterion) => {
     const expected = criterion.expect ?? [];
-    const missing = expected.filter((fragment) => !code.includes(fragment));
+    const base = { criterionId: criterion.id, name: criterion.description, file: criterion.file };
+
+    if (criterion.file && files[criterion.file] === undefined) {
+      return { ...base, passed: false, detail: `El archivo ${criterion.file} no existe en el workspace.` };
+    }
+    const content = criterion.file ? files[criterion.file] : all;
+    const missing = expected.filter((fragment) => !content.includes(fragment));
     const passed = missing.length === 0;
+    const where = criterion.file ? ` en ${criterion.file}` : '';
     return {
-      criterionId: criterion.id,
-      name: criterion.description,
+      ...base,
       passed,
       detail: passed
-        ? 'Criterio verificado en el código.'
-        : `No se encontró: ${missing.map((m) => `\`${m}\``).join(', ')}`,
+        ? `Verificado${where} (${expected.length} comprobación${expected.length === 1 ? '' : 'es'}).`
+        : `No se encontró${where}: ${missing.map((m) => `\`${m}\``).join(', ')}`,
     };
   });
   const feedback = results

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { AgentMessage, Iteration, LogEntry, Run, RunSummary, Task } from '../types';
+import type { AgentMessage, FileChange, Iteration, LogEntry, Run, RunSummary, Task } from '../types';
 import type { RunRepository } from './repository';
 
 /**
@@ -31,6 +31,7 @@ export class SupabaseRunRepository implements RunRepository {
     if (run.messages.length) await check(this.db.from('agent_messages').upsert(run.messages.map(messageRow)));
     if (run.logs.length) await check(this.db.from('agent_logs').upsert(run.logs.map(logRow)));
     if (run.iterations.length) await check(this.db.from('iterations').upsert(run.iterations.map(iterationRow)));
+    if (run.changes.length) await check(this.db.from('file_changes').upsert(run.changes.map(changeRow)));
   }
 
   async getRun(id: string): Promise<Run | null> {
@@ -38,13 +39,14 @@ export class SupabaseRunRepository implements RunRepository {
     if (error) throw new Error(`Supabase: ${error.message}`);
     if (!r) return null;
 
-    const [tasks, messages, logs, iterations] = await Promise.all([
+    const [tasks, messages, logs, iterations, changes] = await Promise.all([
       this.db.from('tasks').select('*').eq('run_id', id).order('position'),
       this.db.from('agent_messages').select('*').eq('run_id', id).order('created_at'),
       this.db.from('agent_logs').select('*').eq('run_id', id).order('created_at'),
       this.db.from('iterations').select('*').eq('run_id', id).order('created_at'),
+      this.db.from('file_changes').select('*').eq('run_id', id).order('seq'),
     ]);
-    for (const res of [tasks, messages, logs, iterations]) {
+    for (const res of [tasks, messages, logs, iterations, changes]) {
       if (res.error) throw new Error(`Supabase: ${res.error.message}`);
     }
 
@@ -71,7 +73,7 @@ export class SupabaseRunRepository implements RunRepository {
           status: t.status,
           attempts: t.attempts,
           acceptanceCriteria: t.acceptance_criteria ?? [],
-          code: t.code ?? undefined,
+          files: t.files ?? [],
           feedback: t.feedback ?? [],
           updatedAt: t.updated_at,
         }),
@@ -91,6 +93,19 @@ export class SupabaseRunRepository implements RunRepository {
       ),
       logs: (logs.data ?? []).map(
         (l): LogEntry => ({ id: l.id, runId: l.run_id, agent: l.agent, level: l.level, message: l.message, createdAt: l.created_at }),
+      ),
+      changes: (changes.data ?? []).map(
+        (c): FileChange => ({
+          id: c.id,
+          runId: c.run_id,
+          taskId: c.task_id,
+          iteration: c.iteration,
+          path: c.path,
+          kind: c.kind,
+          before: c.before_content,
+          after: c.after_content,
+          createdAt: c.created_at,
+        }),
       ),
       iterations: (iterations.data ?? []).map(
         (i): Iteration => ({ id: i.id, runId: i.run_id, taskId: i.task_id, number: i.number, passed: i.passed, results: i.results ?? [], createdAt: i.created_at }),
@@ -139,7 +154,7 @@ const taskRow = (t: Task) => ({
   status: t.status,
   attempts: t.attempts,
   acceptance_criteria: t.acceptanceCriteria,
-  code: t.code ?? null,
+  files: t.files,
   feedback: t.feedback,
   updated_at: t.updatedAt,
 });
@@ -173,4 +188,17 @@ const iterationRow = (i: Iteration) => ({
   passed: i.passed,
   results: i.results,
   created_at: i.createdAt,
+});
+
+const changeRow = (c: FileChange, seq: number) => ({
+  id: c.id,
+  run_id: c.runId,
+  task_id: c.taskId,
+  seq,
+  iteration: c.iteration,
+  path: c.path,
+  kind: c.kind,
+  before_content: c.before,
+  after_content: c.after,
+  created_at: c.createdAt,
 });

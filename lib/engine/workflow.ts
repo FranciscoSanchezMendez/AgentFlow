@@ -1,8 +1,9 @@
-import type { AgentProvider, PlannedTask } from '../agents/provider';
+import type { AgentProvider, ImplementOutput, PlannedTask } from '../agents/provider';
 import type {
   AgentId,
   AgentMessage,
   AgentStatus,
+  FileChange,
   Iteration,
   LogEntry,
   LogLevel,
@@ -10,6 +11,7 @@ import type {
   Task,
   WorkflowEvent,
 } from '../types';
+import { WORKSPACE_LIMITS, sanitizePath } from '../workspace';
 
 export interface WorkflowOptions {
   prompt: string;
@@ -25,16 +27,20 @@ export interface WorkflowOptions {
 
 const INTEGRATION_TITLE = 'Validación de integración final';
 
+const KIND_LABEL = { created: 'creado', modified: 'modificado', deleted: 'eliminado' } as const;
+
 /**
  * Motor del flujo multiagente:
  *
  *   Orchestrator ──plan──▶ tareas
  *   por cada tarea:
- *     Develop ──código──▶ Testing ──feedback──▶ Develop  (hasta pasar o agotar iteraciones)
+ *     Develop ──archivos──▶ workspace ──▶ Testing ──feedback──▶ Develop
+ *     (hasta que pasan todas las pruebas o se agotan las iteraciones)
  *   Testing ──▶ validación de integración
  *   Orchestrator ──▶ informe final
  *
- * Emite eventos en tiempo real y devuelve el `Run` completo al terminar.
+ * El workspace es virtual (memoria + historial de cambios): nunca se escribe en
+ * el sistema de archivos del servidor ni se ejecuta el código generado.
  */
 export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
   const { prompt, maxIterations, provider, onEvent, stepDelayMs = 0, signal } = options;
@@ -56,7 +62,9 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
     messages: [],
     logs: [],
     iterations: [],
+    changes: [],
   };
+  const workspace = new Map<string, string>();
 
   const emit = async (event: WorkflowEvent) => {
     if (onEvent) await onEvent(event);
@@ -79,7 +87,7 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
   };
   const updateTask = async (task: Task, patch: Partial<Task>) => {
     Object.assign(task, patch, { updatedAt: now() });
-    await emit({ type: 'task_updated', task: { ...task, feedback: [...task.feedback] } });
+    await emit({ type: 'task_updated', task: { ...task, feedback: [...task.feedback], files: [...task.files] } });
   };
   const createTask = async (planned: PlannedTask, assignee: AgentId, reviewer?: AgentId): Promise<Task> => {
     const task: Task = {
@@ -93,12 +101,54 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
       status: 'pending',
       attempts: 0,
       acceptanceCriteria: planned.acceptanceCriteria,
+      files: [],
       feedback: [],
       updatedAt: now(),
     };
     run.tasks.push(task);
     await emit({ type: 'task_created', task: { ...task } });
     return task;
+  };
+
+  /** Aplica la entrega de Develop al workspace y registra cada cambio. */
+  const applyArtifacts = async (task: Task, iteration: number, output: ImplementOutput): Promise<FileChange[]> => {
+    const applied: FileChange[] = [];
+    const record = async (path: string, kind: FileChange['kind'], before: string | null, after: string | null) => {
+      const change: FileChange = { id: newId(), runId: run.id, taskId: task.id, iteration, path, kind, before, after, createdAt: now() };
+      run.changes.push(change);
+      applied.push(change);
+      if (!task.files.includes(path)) task.files.push(path);
+      await emit({ type: 'file_changed', change });
+    };
+
+    for (const file of output.files ?? []) {
+      const path = sanitizePath(file?.path);
+      if (!path || typeof file.content !== 'string') {
+        await log('system', 'warn', `Ruta de archivo rechazada por seguridad: «${String(file?.path).slice(0, 80)}».`);
+        continue;
+      }
+      if (file.content.length > WORKSPACE_LIMITS.maxFileBytes) {
+        await log('system', 'warn', `${path} supera el tamaño máximo permitido y no se ha guardado.`);
+        continue;
+      }
+      const before = workspace.get(path) ?? null;
+      if (before === file.content) continue; // sin cambios
+      if (before === null && workspace.size >= WORKSPACE_LIMITS.maxFiles) {
+        await log('system', 'warn', `Límite de ${WORKSPACE_LIMITS.maxFiles} archivos alcanzado: ${path} no se ha creado.`);
+        continue;
+      }
+      workspace.set(path, file.content);
+      await record(path, before === null ? 'created' : 'modified', before, file.content);
+    }
+
+    for (const raw of output.deleted ?? []) {
+      const path = sanitizePath(raw);
+      if (!path || !workspace.has(path)) continue;
+      const before = workspace.get(path)!;
+      workspace.delete(path);
+      await record(path, 'deleted', before, null);
+    }
+    return applied;
   };
 
   await emit({ type: 'run_started', run: structuredClone(run) });
@@ -116,7 +166,7 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
     const integration = await createTask(
       {
         title: INTEGRATION_TITLE,
-        description: 'Comprobar que todas las tareas de desarrollo han superado sus pruebas.',
+        description: 'Comprobar que todas las tareas de desarrollo han superado sus pruebas y que el workspace contiene sus archivos.',
         acceptanceCriteria: [{ id: 'all-tasks', description: 'Todas las tareas de desarrollo están completadas' }],
       },
       'testing',
@@ -142,21 +192,32 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
       let passed = false;
 
       for (let attempt = 1; attempt <= maxIterations; attempt++) {
-        // Develop
-        await status('develop', 'working', `${attempt === 1 ? 'Implementando' : 'Corrigiendo'} «${task.title}» (iteración ${attempt})`);
+        // Develop escribe archivos
+        await status('develop', 'working', `${attempt === 1 ? 'Escribiendo' : 'Corrigiendo'} archivos de «${task.title}» (iteración ${attempt})`);
         await updateTask(task, { status: 'in_progress', attempts: attempt });
         await log('develop', 'info', `Iteración ${attempt}: ${attempt === 1 ? 'implementando' : 'aplicando correcciones en'} «${task.title}».`);
         await pause();
 
-        const impl = await provider.implement({ prompt, task: plannedRef, attempt, previousCode: task.code, feedback: task.feedback });
-        await updateTask(task, { code: impl.code, status: 'in_review' });
-        await say({ from: 'develop', to: 'testing', kind: 'implementation', taskId: task.id, iteration: attempt, content: impl.notes });
+        const impl = await provider.implement({
+          prompt,
+          task: plannedRef,
+          attempt,
+          workspace: Object.fromEntries(workspace),
+          feedback: task.feedback,
+        });
+        const changes = await applyArtifacts(task, attempt, impl);
+        await updateTask(task, { status: 'in_review' });
+        const changeList = changes.length
+          ? changes.map((c) => `• ${c.path} (${KIND_LABEL[c.kind]})`).join('\n')
+          : '• Sin cambios en el workspace';
+        await say({ from: 'develop', to: 'testing', kind: 'implementation', taskId: task.id, iteration: attempt, content: `${impl.notes}\n${changeList}` });
+        await log('develop', changes.length ? 'success' : 'warn', `Iteración ${attempt}: ${changes.length} archivo(s) ${changes.length ? 'actualizados en el workspace' : 'modificados'}.`);
         await status('develop', 'waiting', 'Esperando revisión de Testing');
 
-        // Testing
-        await status('testing', 'working', `Verificando «${task.title}» (iteración ${attempt})`);
+        // Testing inspecciona el workspace
+        await status('testing', 'working', `Inspeccionando archivos de «${task.title}» (iteración ${attempt})`);
         await pause();
-        const review = await provider.review({ prompt, task: plannedRef, code: impl.code, attempt });
+        const review = await provider.review({ prompt, task: plannedRef, files: Object.fromEntries(workspace), attempt });
         passed = review.results.length > 0 && review.results.every((r) => r.passed);
 
         const iteration: Iteration = { id: newId(), runId: run.id, taskId: task.id, number: attempt, passed, results: review.results, createdAt: now() };
@@ -193,6 +254,7 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
     await updateTask(integration, { status: 'in_progress', attempts: 1 });
     await pause();
     const failed = devTasks.filter((t) => t.status !== 'completed');
+    const missingFiles = devTasks.flatMap((t) => t.files).filter((p, i, all) => all.indexOf(p) === i && !workspace.has(p));
     const integrationPassed = failed.length === 0;
     const integrationIteration: Iteration = {
       id: newId(),
@@ -207,30 +269,38 @@ export async function runWorkflow(options: WorkflowOptions): Promise<Run> {
           passed: integrationPassed,
           detail: integrationPassed ? `${devTasks.length}/${devTasks.length} tareas completadas.` : `Tareas fallidas: ${failed.map((t) => t.title).join(', ')}`,
         },
+        {
+          criterionId: 'workspace',
+          name: 'El workspace contiene los archivos entregados',
+          passed: workspace.size > 0,
+          detail: workspace.size > 0 ? `${workspace.size} archivo(s): ${[...workspace.keys()].sort().join(', ')}${missingFiles.length ? ` · eliminados: ${missingFiles.join(', ')}` : ''}` : 'El workspace está vacío.',
+        },
       ],
       createdAt: now(),
     };
+    integrationIteration.passed = integrationIteration.results.every((r) => r.passed);
     run.iterations.push(integrationIteration);
     await emit({ type: 'iteration', iteration: integrationIteration });
+    const allOk = integrationIteration.passed;
     await updateTask(integration, {
-      status: integrationPassed ? 'completed' : 'failed',
-      feedback: integrationPassed ? [] : failed.map((t) => `Pendiente: ${t.title}`),
+      status: allOk ? 'completed' : 'failed',
+      feedback: allOk ? [] : failed.map((t) => `Pendiente: ${t.title}`),
     });
-    await log('testing', integrationPassed ? 'success' : 'error', integrationPassed ? 'Validación de integración superada.' : 'La validación de integración ha fallado.');
-    await status('testing', 'done', integrationPassed ? 'Pruebas superadas' : 'Pruebas con fallos');
+    await log('testing', allOk ? 'success' : 'error', allOk ? 'Validación de integración superada.' : 'La validación de integración ha fallado.');
+    await status('testing', 'done', allOk ? 'Pruebas superadas' : 'Pruebas con fallos');
     await status('develop', 'done', 'Trabajo entregado');
 
     // 4. Informe final.
     await status('orchestrator', 'working', 'Redactando informe final');
     await pause();
     const completed = devTasks.length - failed.length;
-    run.status = integrationPassed ? 'passed' : 'failed';
-    run.summary = integrationPassed
-      ? `Workflow completado: ${completed}/${devTasks.length} tareas aprobadas por Testing en ${run.totalIterations} iteraciones de desarrollo.`
+    run.status = allOk ? 'passed' : 'failed';
+    run.summary = allOk
+      ? `Workflow completado: ${completed}/${devTasks.length} tareas aprobadas por Testing en ${run.totalIterations} iteraciones de desarrollo. El workspace contiene ${workspace.size} archivo(s).`
       : `Workflow terminado con fallos: ${completed}/${devTasks.length} tareas aprobadas. ${failed.length} tarea(s) agotaron el límite de ${maxIterations} iteraciones.`;
     await say({ from: 'orchestrator', to: 'user', kind: 'report', content: run.summary });
-    await log('orchestrator', integrationPassed ? 'success' : 'warn', run.summary);
-    await status('orchestrator', 'done', integrationPassed ? 'Workflow completado' : 'Workflow con fallos');
+    await log('orchestrator', allOk ? 'success' : 'warn', run.summary);
+    await status('orchestrator', 'done', allOk ? 'Workflow completado' : 'Workflow con fallos');
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Error desconocido';
     run.status = 'error';

@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { agentsFromRun, applyEvent, initialDashboardState, readNdjson, type DashboardState } from '@/lib/client/runState';
+import { CONTACT_DEMO_PROMPT } from '@/lib/agents/demo/catalog';
 import type { Run, RunSummary, WorkflowEvent } from '@/lib/types';
 import { ActivityLog } from './ActivityLog';
 import { AgentCards } from './AgentCards';
 import { Conversation } from './Conversation';
 import { HistoryPanel } from './HistoryPanel';
 import { TaskBoard } from './TaskBoard';
+import { Workspace, type WorkspaceFocus } from './Workspace';
 import { Badge, RUN_STATUS_LABEL, durationLabel } from './ui';
 
 interface Health {
@@ -19,7 +21,7 @@ interface Health {
 }
 
 const EXAMPLES = [
-  'Añade una página de contacto con formulario y validación.',
+  CONTACT_DEMO_PROMPT,
   'Crea una API REST para gestionar productos.',
   'Implementa el login de usuarios con sesión segura.',
   'Construye una lista de tareas con filtros.',
@@ -51,6 +53,8 @@ export function Dashboard() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [, forceTick] = useState(0);
+  const [focus, setFocus] = useState<WorkspaceFocus | null>(null);
+  const openFile = useCallback((path: string) => setFocus({ path, nonce: Date.now() }), []);
 
   const limits = health?.limits ?? { minIterations: 1, maxIterations: 10, defaultIterations: 3, promptMaxLength: 2000 };
 
@@ -266,8 +270,10 @@ export function Dashboard() {
             </section>
           )}
 
+          <Workspace run={run} focus={focus} />
+
           <div className="grid-2">
-            <TaskBoard run={run} />
+            <TaskBoard run={run} onOpenFile={openFile} />
             <Conversation run={run} />
           </div>
 
